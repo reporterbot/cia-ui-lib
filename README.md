@@ -2,13 +2,14 @@
 
 A dark, grey, Minecraft-client style UI library for Roblox, shipped as a **single LocalScript** (`main.lua`).
 
-**Build 7 · v1**
+**Build 8 · v1**
 
 - Three display modes you can switch between at any time: a **2D** window, a **3D** hub that floats in front of your character, and floating **Tabs** panels along the top of the screen
 - Modules with smooth expanding settings, toggles, sliders, dropdowns (single or multi-select), buttons, keybinds and labels
 - A built-in floating **island** at the top middle of the screen: your local time with a blinking colon, a show/hide button, a mode button beside it, and a live FPS / ping readout on the other side. The library builds it itself, so nothing has to exist in `StarterGui`
 - **Interactive Elements**: flipping a toggle on or off plays an effect from exactly where you clicked, in the theme colour, that stays inside its tab (Ripple, 1's and 0's, or Glass Crack). It has its own **When On** / **When Off** switches
-- **Custom Backgrounds**: animated backdrops for every tab in 2D, 3D and Tabs mode: Waves, Stormy Night (rain, splashes, lightning) and Cherry Blossom
+- **Custom Backgrounds**: animated backdrops in the theme colour for every tab in 2D, 3D and Tabs mode: Waves, Stormy Night (rain, splashes, lightning) and Cherry Blossom
+- **Elements Transparency**: elements fade automatically so a background shows through, or use your own value with a 0 to 0.9 slider
 - Notifications with a pulsing outline, a draining time bar and a close button
 - Array list of enabled modules
 - Automatic scaling and positioning for different screen sizes
@@ -89,6 +90,8 @@ local UI = Library.new({
     EffectWhenOff = true,               -- ...when a toggle is switched off
     CustomBackgrounds = false,          -- animated backdrop behind every tab
     Background = "Waves",               -- "Waves" | "Stormy Night" | "Cherry Blossom"
+    ElementTransparencyOverride = false, -- true = use ElementTransparency instead of the automatic 0.5
+    ElementTransparency = 0.5,          -- 0 to 0.9
 
     -- Advanced
     Secure = false,                     -- true = parent to CoreGui instead of PlayerGui (see below)
@@ -122,11 +125,22 @@ Another toggle in **Settings**, with a **Background** dropdown. It puts an anima
 
 | Background | What it does |
 | --- | --- |
-| `Waves` | Water that swells up and down on a spring model; random impulses send waves racing along the surface and sloshing back. Tinted with the theme colour. |
+| `Waves` | Smooth, curved water: two layers on a spring model with a swell that rolls across the surface, a continuous crest line, and random impulses that send waves racing along it and sloshing back. |
 | `Stormy Night` | A dark night with rain that falls at a slant and splashes at the bottom of the tab, each splash leaving a puddle that fades out quickly, and random lightning that strikes with a jagged bolt and a choppy double flash that lights the whole tab. |
-| `Cherry Blossom` | Blocky, pixel-art cherry trees on a grass strip. Petals drift off the canopies with a smooth left-and-right sway, land and stop, then fade away. |
+| `Cherry Blossom` | Blocky, pixel-art cherry trees on a grass strip, standing about half as tall as the tab. Petals drift off the canopies with a smooth left-and-right sway, land and stop, then fade away. |
+
+Every background is coloured from the **theme colour** (rain, splashes, lightning, water, leaves, trunks and grass are all shades of it) and recolours live when the theme changes, including Rainbow.
 
 Turn it on from code with `CustomBackgrounds = true` and `Background = "Stormy Night"` in `Library.new`, or `UI:SetBackgroundEnabled(true)` and `UI:SetBackground("Waves")`.
+
+#### Elements Transparency
+
+A third toggle in **Settings**, with a **Transparency** slider (0 to 0.9). It controls how see-through the tab content (modules, controls and text) is, so a background can show through.
+
+- **Toggle off (default):** while a Custom Background is on, elements automatically fade to **0.5**. With no background they stay solid.
+- **Toggle on:** the slider value overrides that, whether or not a background is on.
+
+The fade changes smoothly. It applies to the window in 2D and 3D and to each panel in Tabs mode; the backdrop, lighting and click effects stay solid. Set it from code with `ElementTransparencyOverride` and `ElementTransparency` in `Library.new`, or `UI:SetElementTransparencyOverride(bool)` and `UI:SetElementTransparency(0.7)`.
 
 #### Advanced: `Secure`
 
@@ -146,6 +160,7 @@ Roblox only allows certain contexts to parent into CoreGui (plugins and some ele
 | `UI:SetMode("2D" \| "3D" \| "Tabs")` | Switch display mode. |
 | `UI:SetVisible(bool)` / `UI:Toggle()` | Show or hide the hub. |
 | `UI:SetBackgroundEnabled(bool)` / `UI:SetBackground(name)` | Turn Custom Backgrounds on or off, or pick `"Waves"`, `"Stormy Night"` or `"Cherry Blossom"`. |
+| `UI:SetElementTransparencyOverride(bool)` / `UI:SetElementTransparency(n)` | Use your own element transparency (0 to 0.9) instead of the automatic 0.5 over a background. |
 | `UI:PlayEffect(origin, tab)` | Play the current Interactive Elements effect from a GuiObject or a screen position inside `tab`'s space. |
 | `UI:SetPanelOpen(tab, bool)` | Collapse or open a tab's panel in Tabs mode (`tab` is the Tab object or its name). The state is remembered when you switch modes. |
 | `UI:SetAccent(Color3)` | Change the accent colour. Presets are in `Library.ACCENTS`. |

@@ -1,5 +1,5 @@
 --[[
-	CIALib v1  |  Build 7
+	CIALib v1  |  Build 8
 	Single-script build of the Minecraft-client style UI library.
 
 	Modes   : 2D (window), 3D (floating hub in front of your character), Tabs (floating panels along the top)
@@ -15,7 +15,7 @@
 		UI:Notify({ Title = "Hi", Content = "Hello", Type = "Success" })
 ]]
 
-local BUILD = 7
+local BUILD = 8
 local VERSION = "v1"
 
 -- only ever one hub per client (this script is re-cloned from StarterGui on respawn)
@@ -281,6 +281,11 @@ function Library.new(config)
 	self.BackgroundsEnabled = config.CustomBackgrounds == true
 	self.BackgroundStyle = config.Background or "Waves"
 	self._bgLayers = {}
+	-- Elements Transparency: with a background on, elements fade to 0.5 so it shows through;
+	-- the override switches that to the slider value (and applies even without a background)
+	self.ElementOverride = config.ElementTransparencyOverride == true
+	self.ElementTransparency = config.ElementTransparency or 0.5
+	self._elemT = 0
 	self.ToggleNotifications = true
 	self.Rainbow = false
 	self.Tabs = {}
@@ -299,6 +304,7 @@ function Library.new(config)
 	self:_buildWindow()
 	self:_buildOverlays()
 	self:_startBackgrounds()
+	self:_applyElementTransparency()
 	self:_watchViewport()
 	self:_buildIsland(config.Island)
 	self:_connectInput()
@@ -546,6 +552,15 @@ function Library:_buildWindow()
 		BackgroundTransparency = 1,
 		ClipsDescendants = true,
 		Parent = win,
+	})
+
+	-- every tab page lives in this group, so Elements Transparency can fade the content without touching the backdrop
+	self._pages = new("CanvasGroup", {
+		Name = "Pages",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		ZIndex = 1,
+		Parent = self.Content,
 	})
 
 	-- effect layer over the tab space; ClipsDescendants keeps every effect inside it
@@ -1228,68 +1243,82 @@ end
 
 local BACKGROUNDS = {}
 
--- water that swells up and down: two rows of columns on a spring / neighbour-coupling model, kicked by random
--- impulses so waves race along the surface and slosh back
+-- water with a smooth, curved surface: a handful of simulated nodes (spring pull to the tide + neighbour coupling),
+-- smoothed with a cubic curve into fine fill columns, and a continuous crest line made of short rotated segments.
+-- Random impulses shove a node so a wave races along the surface and sloshes back.
 BACKGROUNDS["Waves"] = function(self, L)
 	local rng = Random.new()
-	local width = math.max(L.Back.AbsoluteSize.X / math.max(L.Scale(), 0.05), 215)
-	local N = math.clamp(math.floor(width / 5), 30, 110)
-
-	-- opaque water, shaded from the theme colour over the dark backdrop (semi-transparent columns would show
-	-- seams where they overlap)
+	local scale = math.max(L.Scale(), 0.05)
+	local width = math.max(L.Back.AbsoluteSize.X / scale, 215)
+	local M = math.clamp(math.floor(width / 14), 14, 48) -- simulated nodes
+	local C = math.clamp(math.floor(width / 4), 40, 140) -- fill columns
+	local P = math.clamp(math.floor(width / 8), 16, 70) -- points along the crest line
 	local DARK = Color3.fromRGB(17, 17, 17)
+
 	local function row(mix, crestMix, z)
-		local bars, crests = {}, {}
-		for i = 1, N do
-			local bar = new("Frame", {
+		local bars, segs = {}, {}
+		for i = 1, C do
+			bars[i] = new("Frame", {
 				AnchorPoint = Vector2.new(0, 1),
-				Position = UDim2.fromScale((i - 1) / N, 1),
-				Size = UDim2.new(1 / N, 1, 0, 0),
+				Position = UDim2.fromScale((i - 1) / C, 1),
+				Size = UDim2.new(1 / C, 1, 0, 0),
 				BackgroundColor3 = DARK:Lerp(self.Accent, mix),
 				ZIndex = z,
 				Parent = L.Back,
 			})
-			crests[i] = new("Frame", {
-				Size = UDim2.new(1, 0, 0, 2),
-				BackgroundColor3 = DARK:Lerp(self.Accent, crestMix),
-				Parent = bar,
-			})
-			bars[i] = bar
 		end
-		local h, v = table.create(N, 0), table.create(N, 0)
-		return { bars = bars, crests = crests, h = h, v = v, mix = mix, crestMix = crestMix }
+		for i = 1, P - 1 do
+			segs[i] = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Size = UDim2.fromOffset(10, 3),
+				BackgroundColor3 = DARK:Lerp(self.Accent, crestMix),
+				ZIndex = z,
+				Parent = L.Back,
+			})
+		end
+		return { bars = bars, segs = segs, h = table.create(M, 0), v = table.create(M, 0), mix = mix, crestMix = crestMix }
 	end
 
 	local rows = {
-		{ r = row(0.16, 0.38, 1), base = 0.30, amp = 0.08, omega = 1.0, phase = 0 },
-		{ r = row(0.27, 0.58, 2), base = 0.20, amp = 0.10, omega = 1.5, phase = 1.7 },
+		{ r = row(0.16, 0.40, 1), base = 0.30, amp = 0.08, omega = 1.0, phase = 0 },
+		{ r = row(0.27, 0.62, 2), base = 0.21, amp = 0.10, omega = 1.5, phase = 1.7 },
 	}
 	for _, w in ipairs(rows) do
-		for i = 1, N do
+		for i = 1, M do
 			w.r.h[i] = w.base
 		end
 	end
 
-	local K, C, SPREAD = 14, 1.6, 260 -- spring pull to the tide, damping, how strongly neighbours drag each other
+	-- smooth (Catmull-Rom) height at u in 0..1 across the surface
+	local function sample(h, u)
+		local x = u * (M - 1) + 1
+		local i = math.min(math.floor(x), M - 1)
+		local f = x - i
+		local p0, p1, p2, p3 = h[math.max(i - 1, 1)], h[i], h[i + 1], h[math.min(i + 2, M)]
+		return 0.5
+			* ((2 * p1) + (-p0 + p2) * f + (2 * p0 - 5 * p1 + 4 * p2 - p3) * f * f + (-p0 + 3 * p1 - 3 * p2 + p3) * f * f * f)
+	end
+
+	local K, DAMP, SPREAD = 14, 1.6, 90 -- pull to the tide, damping, neighbour coupling
 	local acc, kick, color = 0, 0.4, self.Accent
 
 	local function simulate(dt, now)
 		for _, w in ipairs(rows) do
 			local h, v = w.r.h, w.r.v
-			for i = 1, N do
-				-- the tide heaves the whole surface, and its phase shifts along the row so a swell rolls across it
-				local level = w.base + w.amp * math.sin(now * w.omega + w.phase + i * 0.22)
+			for i = 1, M do
+				-- the tide heaves the whole surface; its phase shifts along the row so a swell rolls across it
+				local level = w.base + w.amp * math.sin(now * w.omega + w.phase + i * 0.5)
 				local left, right = h[i - 1] or h[i], h[i + 1] or h[i]
-				v[i] += (K * (level - h[i]) - C * v[i] + SPREAD * (left + right - 2 * h[i])) * dt
+				v[i] += (K * (level - h[i]) - DAMP * v[i] + SPREAD * (left + right - 2 * h[i])) * dt
 			end
-			for i = 1, N do
+			for i = 1, M do
 				h[i] = math.clamp(h[i] + v[i] * dt, 0.04, 0.88)
 			end
 		end
 	end
 
 	return {
-		Step = function(dt, now)
+		Step = function(dt, now, w, hgt)
 			acc += dt
 			local steps = 0
 			while acc >= 1 / 60 and steps < 4 do
@@ -1301,23 +1330,39 @@ BACKGROUNDS["Waves"] = function(self, L)
 				acc = 0
 			end
 
-			-- a sudden woosh: a random column on a random row gets shoved and the wave runs along the surface
+			-- a sudden woosh: a random node on a random row gets shoved and the wave runs along the surface
 			kick -= dt
 			if kick <= 0 then
 				kick = rng:NextNumber(0.9, 2.2)
-				local w = rows[rng:NextInteger(1, #rows)]
-				w.r.v[rng:NextInteger(1, N)] += rng:NextNumber(1.1, 2.0) * (rng:NextNumber() < 0.5 and -1 or 1)
+				local wv = rows[rng:NextInteger(1, #rows)]
+				wv.r.v[rng:NextInteger(1, M)] += rng:NextNumber(0.9, 1.7) * (rng:NextNumber() < 0.5 and -1 or 1)
 			end
 
 			local recolor = color ~= self.Accent
 			color = self.Accent
-			for _, w in ipairs(rows) do
-				local r = w.r
-				for i = 1, N do
-					r.bars[i].Size = UDim2.new(1 / N, 1, r.h[i], 0)
-					if recolor then
+			for _, wv in ipairs(rows) do
+				local r = wv.r
+				for i = 1, C do
+					r.bars[i].Size = UDim2.new(1 / C, 1, sample(r.h, (i - 0.5) / C), 0)
+				end
+				-- crest line: consecutive points joined by short segments, so the top edge is a smooth curve
+				local px, py = 0, hgt * (1 - sample(r.h, 0))
+				for j = 1, P - 1 do
+					local nx = w * j / (P - 1)
+					local ny = hgt * (1 - sample(r.h, j / (P - 1)))
+					local dx, dy = nx - px, ny - py
+					local seg = r.segs[j]
+					seg.Position = UDim2.fromOffset((px + nx) / 2, (py + ny) / 2)
+					seg.Size = UDim2.fromOffset(math.sqrt(dx * dx + dy * dy) + 1.5, 3)
+					seg.Rotation = math.deg(math.atan2(dy, dx))
+					px, py = nx, ny
+				end
+				if recolor then
+					for i = 1, C do
 						r.bars[i].BackgroundColor3 = DARK:Lerp(color, r.mix)
-						r.crests[i].BackgroundColor3 = DARK:Lerp(color, r.crestMix)
+					end
+					for j = 1, P - 1 do
+						r.segs[j].BackgroundColor3 = DARK:Lerp(color, r.crestMix)
 					end
 				end
 			end
@@ -1325,15 +1370,28 @@ BACKGROUNDS["Waves"] = function(self, L)
 	}
 end
 
--- rain that streaks down and splashes into short-lived puddles, with the odd lightning strike that lights the tab
+-- rain that streaks down and splashes into short-lived puddles, with the odd lightning strike that lights the tab.
+-- Every colour is derived from the theme colour.
 BACKGROUNDS["Stormy Night"] = function(self, L)
 	local rng = Random.new()
 	local back, front = L.Back, L.Front
+	local WHITE, BLACK = Color3.new(1, 1, 1), Color3.new(0, 0, 0)
+	local function palette(a)
+		return {
+			night = BLACK:Lerp(a, 0.12),
+			rain = a:Lerp(WHITE, 0.45),
+			splash = a:Lerp(WHITE, 0.25),
+			flash = a:Lerp(WHITE, 0.8),
+			bolt = a:Lerp(WHITE, 0.88),
+		}
+	end
+	local color = self.Accent
+	local pal = palette(color)
 
 	local night = new("Frame", {
 		Name = "Night",
 		Size = UDim2.fromScale(1, 1),
-		BackgroundColor3 = Color3.fromRGB(5, 8, 20),
+		BackgroundColor3 = pal.night,
 		BackgroundTransparency = 0.5,
 		ZIndex = 0,
 		Parent = back,
@@ -1346,33 +1404,30 @@ BACKGROUNDS["Stormy Night"] = function(self, L)
 	local flash = new("Frame", {
 		Name = "Flash",
 		Size = UDim2.fromScale(1, 1),
-		BackgroundColor3 = Color3.fromRGB(205, 222, 255),
+		BackgroundColor3 = pal.flash,
 		BackgroundTransparency = 1,
 		Parent = front,
 	})
 
-	local RAIN, SPLASH = Color3.fromRGB(170, 196, 238), Color3.fromRGB(150, 182, 228)
-	local drops, free = {}, {}
+	local drops = {}
 	for i = 1, 70 do
-		local d = {
+		drops[i] = {
 			on = false,
 			f = new("Frame", {
 				Size = UDim2.fromOffset(2, rng:NextInteger(7, 12)),
-				BackgroundColor3 = RAIN,
-				BackgroundTransparency = 0.35,
+				BackgroundColor3 = pal.rain,
+				BackgroundTransparency = 0.3,
 				Visible = false,
 				ZIndex = 2,
 				Parent = back,
 			}),
 		}
-		drops[i] = d
-		free[i] = d
 	end
 	local puddles, parts = {}, {}
 	for i = 1, 22 do
 		local f = new("Frame", {
 			AnchorPoint = Vector2.new(0.5, 1),
-			BackgroundColor3 = SPLASH,
+			BackgroundColor3 = pal.splash,
 			Visible = false,
 			ZIndex = 2,
 			Parent = back,
@@ -1385,7 +1440,7 @@ BACKGROUNDS["Stormy Night"] = function(self, L)
 			on = false,
 			f = new("Frame", {
 				Size = UDim2.fromOffset(2, 2),
-				BackgroundColor3 = SPLASH,
+				BackgroundColor3 = pal.splash,
 				Visible = false,
 				ZIndex = 3,
 				Parent = back,
@@ -1405,6 +1460,7 @@ BACKGROUNDS["Stormy Night"] = function(self, L)
 		local p = take(puddles)
 		if p then
 			p.on, p.x, p.t, p.f.Visible = true, x, 0, true
+			p.f.BackgroundColor3 = pal.splash
 		end
 		for _ = 1, rng:NextInteger(3, 5) do
 			local s = take(parts)
@@ -1412,6 +1468,7 @@ BACKGROUNDS["Stormy Night"] = function(self, L)
 				s.on, s.x, s.y = true, x, ground - 2
 				s.vx, s.vy = rng:NextNumber(-70, 70), -rng:NextNumber(90, 170)
 				s.life, s.max = 0, rng:NextNumber(0.28, 0.5)
+				s.f.BackgroundColor3 = pal.splash
 				s.f.Visible = true
 			end
 		end
@@ -1430,7 +1487,7 @@ BACKGROUNDS["Stormy Night"] = function(self, L)
 				Position = UDim2.fromOffset((sx + nx) / 2, (sy + ny) / 2),
 				Size = UDim2.fromOffset(len + 1, th),
 				Rotation = sa,
-				BackgroundColor3 = Color3.fromRGB(232, 240, 255),
+				BackgroundColor3 = pal.bolt,
 				ZIndex = 5,
 				Parent = front,
 			}))
@@ -1476,6 +1533,12 @@ BACKGROUNDS["Stormy Night"] = function(self, L)
 
 	return {
 		Step = function(dt, now, w, h)
+			if color ~= self.Accent then -- the theme colour changed
+				color = self.Accent
+				pal = palette(color)
+				night.BackgroundColor3 = pal.night
+				flash.BackgroundColor3 = pal.flash
+			end
 			-- rain
 			spawnAcc += dt * math.max(w, 120) * 0.16
 			while spawnAcc >= 1 do
@@ -1487,6 +1550,7 @@ BACKGROUNDS["Stormy Night"] = function(self, L)
 				d.on, d.x, d.y = true, rng:NextNumber(0, w + 90), -12
 				d.vx, d.vy = -rng:NextNumber(60, 110), rng:NextNumber(420, 640)
 				d.f.Rotation = math.deg(math.atan2(-d.vx, d.vy))
+				d.f.BackgroundColor3 = pal.rain
 				d.f.Visible = true
 			end
 			for _, d in ipairs(drops) do
@@ -1554,7 +1618,8 @@ BACKGROUNDS["Stormy Night"] = function(self, L)
 	}
 end
 
--- a blocky cherry grove: pixel trees along the ground, petals that sway down and rest on the grass before fading
+-- a blocky cherry grove in the theme colour: pixel trees about half as tall as the tab stand on a grass strip, and
+-- petals drift off the canopies with a smooth left-and-right sway, land, stop, then fade away
 BACKGROUNDS["Cherry Blossom"] = function(self, L)
 	local rng = Random.new()
 	local back = L.Back
@@ -1564,66 +1629,80 @@ BACKGROUNDS["Cherry Blossom"] = function(self, L)
 	if H0 < 120 then
 		H0 = 160
 	end
-	local cell = math.clamp(math.floor(H0 / 28), 6, 14) -- size of one "block"
+	-- a tree is about 11 blocks from the ground to the top of its canopy, so the block size makes it ~half the tab
+	local cell = math.clamp(math.floor(H0 * 0.5 / 11), 4, 22)
 
-	local PINKS = {
-		Color3.fromRGB(255, 183, 197),
-		Color3.fromRGB(247, 150, 178),
-		Color3.fromRGB(255, 214, 224),
-		Color3.fromRGB(240, 128, 160),
-	}
-	local TRUNK, TRUNK_DARK, GROUND = Color3.fromRGB(112, 76, 82), Color3.fromRGB(88, 58, 66), Color3.fromRGB(78, 106, 76)
+	local WHITE, BLACK = Color3.new(1, 1, 1), Color3.new(0, 0, 0)
+	local function palette(a)
+		return {
+			blossom = { a:Lerp(WHITE, 0.72), a:Lerp(WHITE, 0.45), a, a:Lerp(BLACK, 0.2) },
+			trunk = BLACK:Lerp(a, 0.40),
+			trunkDark = BLACK:Lerp(a, 0.28),
+			ground = BLACK:Lerp(a, 0.34),
+		}
+	end
+	local color = self.Accent
+	local pal = palette(color)
 
-	new("Frame", {
+	local painted = {} -- every static piece, so a theme colour change can recolour it
+	local function colorOf(kind, idx)
+		if kind == "blossom" then
+			return pal.blossom[idx]
+		end
+		return pal[kind]
+	end
+	local function put(props, kind, idx)
+		props.BackgroundColor3 = colorOf(kind, idx)
+		props.Parent = back
+		local f = new("Frame", props)
+		table.insert(painted, { f, kind, idx })
+		return f
+	end
+
+	put({
 		AnchorPoint = Vector2.new(0, 1),
 		Position = UDim2.fromScale(0, 1),
-		Size = UDim2.new(1, 0, 0, cell),
-		BackgroundColor3 = GROUND,
-		BackgroundTransparency = 0.35,
+		Size = UDim2.new(1, 0, 0, math.max(cell, 6)),
+		BackgroundTransparency = 0.25,
 		ZIndex = 1,
-		Parent = back,
-	})
+	}, "ground")
 	for _ = 1, math.floor(W0 / 26) do -- petals already on the grass
-		new("Frame", {
+		put({
 			AnchorPoint = Vector2.new(0, 1),
-			Position = UDim2.new(rng:NextNumber(), 0, 1, -rng:NextInteger(0, cell - 3)),
+			Position = UDim2.new(rng:NextNumber(), 0, 1, -rng:NextInteger(0, math.max(cell - 3, 2))),
 			Size = UDim2.fromOffset(3, 2),
-			BackgroundColor3 = PINKS[rng:NextInteger(1, #PINKS)],
-			BackgroundTransparency = 0.25,
+			BackgroundTransparency = 0.2,
 			ZIndex = 2,
-			Parent = back,
-		})
+		}, "blossom", rng:NextInteger(1, 4))
 	end
 
 	local spawns = {} -- canopy blocks the petals fall from: { xScale, xOffset, blocksAboveGround }
-	local trees = math.clamp(math.floor(W0 / 130), 2, 6)
+	local trees = math.clamp(math.floor(W0 / (cell * 10)), 2, 6)
 	for n = 1, trees do
-		local xs = (n - 0.5) / trees + rng:NextNumber(-0.04, 0.04)
-		local th = rng:NextInteger(3, 5)
-		local ch = rng:NextInteger(4, 5)
+		local xs = (n - 0.5) / trees + rng:NextNumber(-0.03, 0.03)
+		local th = rng:NextInteger(4, 5)
+		local ch = rng:NextInteger(5, 6)
 		local cw = ch + rng:NextInteger(2, 3)
-		local function block(cx, up, color)
-			new("Frame", {
+		local function block(cx, up, kind, idx)
+			put({
 				AnchorPoint = Vector2.new(0, 1),
 				Position = UDim2.new(xs, cx * cell, 1, -(cell + up * cell)),
 				Size = UDim2.fromOffset(cell, cell),
-				BackgroundColor3 = color,
 				ZIndex = 2,
-				Parent = back,
-			})
+			}, kind, idx)
 		end
 		for up = 0, th - 1 do
-			block(0, up, up % 2 == 0 and TRUNK or TRUNK_DARK)
+			block(0, up, up % 2 == 0 and "trunk" or "trunkDark")
 		end
-		block(-1, th - 1, TRUNK_DARK)
-		block(1, th - 2, TRUNK_DARK)
+		block(-1, th - 1, "trunkDark")
+		block(1, th - 2, "trunkDark")
 		for r = 0, ch - 1 do
 			for c = 0, cw - 1 do
 				local nx = (c - (cw - 1) / 2) / (cw / 2)
 				local ny = (r - (ch - 1) / 2) / (ch / 2)
 				if nx * nx + ny * ny <= 1.25 and rng:NextNumber() < 0.88 then
 					local cx, up = c - math.floor(cw / 2), th + r - 1
-					block(cx, up, PINKS[rng:NextInteger(1, #PINKS)])
+					block(cx, up, "blossom", rng:NextInteger(1, 4))
 					if rng:NextNumber() < 0.35 then
 						table.insert(spawns, { xs, cx * cell, up })
 					end
@@ -1633,15 +1712,15 @@ BACKGROUNDS["Cherry Blossom"] = function(self, L)
 	end
 
 	local leaves = {}
-	for i = 1, math.clamp(math.floor(W0 / 14), 14, 44) do
-		local size = rng:NextInteger(4, 6)
+	for i = 1, math.clamp(math.floor(W0 / 12), 18, 60) do
+		local size = math.clamp(math.floor(cell / 3), 4, 7)
 		leaves[i] = {
 			state = "wait",
 			timer = rng:NextNumber(0, 5),
 			f = new("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Size = UDim2.fromOffset(size, size - 1),
-				BackgroundColor3 = PINKS[rng:NextInteger(1, #PINKS)],
+				BackgroundColor3 = pal.blossom[1],
 				Visible = false,
 				ZIndex = 4,
 				Parent = back,
@@ -1650,7 +1729,15 @@ BACKGROUNDS["Cherry Blossom"] = function(self, L)
 	end
 
 	return {
+		Height = H0, -- lets the layer rebuild the trees if the tab ends up a very different height
 		Step = function(dt, now, w, h)
+			if color ~= self.Accent then -- the theme colour changed
+				color = self.Accent
+				pal = palette(color)
+				for _, p in ipairs(painted) do
+					p[1].BackgroundColor3 = colorOf(p[2], p[3])
+				end
+			end
 			for _, lf in ipairs(leaves) do
 				local state = lf.state
 				if state == "wait" then
@@ -1666,6 +1753,7 @@ BACKGROUNDS["Cherry Blossom"] = function(self, L)
 						lf.vy, lf.amp = rng:NextNumber(22, 38), rng:NextNumber(10, 24)
 						lf.omega, lf.phase, lf.drift = rng:NextNumber(1.2, 2.2), rng:NextNumber(0, math.pi * 2), rng:NextNumber(-8, 8)
 						lf.t0, lf.rest = now, rng:NextNumber(0, 5)
+						lf.f.BackgroundColor3 = pal.blossom[rng:NextInteger(1, 4)]
 						lf.f.BackgroundTransparency = 0.05
 						lf.f.Visible = true
 						lf.state = "fall"
@@ -1674,7 +1762,7 @@ BACKGROUNDS["Cherry Blossom"] = function(self, L)
 					lf.y += lf.vy * dt
 					lf.x0 += lf.drift * dt
 					local wave = lf.omega * (now - lf.t0) + lf.phase
-					local ground = h - cell + lf.rest * 0.6 - 2
+					local ground = h - math.max(cell, 6) + lf.rest * 0.6 - 2
 					if lf.y >= ground then
 						-- landed: it stops where it hit and lies still
 						lf.y, lf.state, lf.timer = ground, "rest", rng:NextNumber(1.4, 2.6)
@@ -1744,6 +1832,43 @@ end
 function Library:SetBackgroundEnabled(on)
 	self.BackgroundsEnabled = on and true or false
 	self:_resetBackgrounds()
+	self:_applyElementTransparency()
+end
+
+-- Elements Transparency: how see-through the tab content is. With a background on it is 0.5 by default; the override
+-- (the module's own toggle) replaces that with the slider value.
+function Library:_elementTarget()
+	if self.ElementOverride then
+		return self.ElementTransparency
+	end
+	return self.BackgroundsEnabled and 0.5 or 0
+end
+
+function Library:_applyElementTransparency(info)
+	if not self._elemAnim then
+		self._elemAnim = animator(self._elemT, function(v)
+			self._elemT = v
+			if self._pages then
+				self._pages.GroupTransparency = v
+			end
+			if self._panels then
+				for _, panel in pairs(self._panels) do
+					panel.Refresh()
+				end
+			end
+		end)
+	end
+	self._elemAnim.To(self:_elementTarget(), info or INFO_SMOOTH)
+end
+
+function Library:SetElementTransparency(value)
+	self.ElementTransparency = math.clamp(value, 0, 0.9)
+	self:_applyElementTransparency(INFO_FAST)
+end
+
+function Library:SetElementTransparencyOverride(on)
+	self.ElementOverride = on and true or false
+	self:_applyElementTransparency()
 end
 
 function Library:_startBackgrounds()
@@ -1762,6 +1887,17 @@ function Library:_startBackgrounds()
 					if L.NeedsBuild then
 						L.NeedsBuild = false
 						self:_buildBg(L)
+					end
+					if L.State and L.State.Height then
+						if math.abs(h - L.State.Height) > math.max(30, L.State.Height * 0.2) then
+							L.SizeSince = L.SizeSince or now
+							if now - L.SizeSince > 0.4 then
+								L.SizeSince = nil
+								L.NeedsBuild = true
+							end
+						else
+							L.SizeSince = nil
+						end
 					end
 					if L.State then
 						local ok, err = pcall(L.State.Step, dt, now, w, h)
@@ -1938,13 +2074,15 @@ function Library:_makePanel(tab)
 		body.Size = UDim2.new(1, 0, 0, bodyH)
 		-- as it closes the contents ride up under the header and fade out; opening reverses it
 		body.Position = UDim2.fromOffset(0, PANEL_HEAD + 2 - math.floor((1 - alpha) * math.min(bodyH, 120) * 0.5))
-		body.GroupTransparency = 1 - math.clamp(alpha * 1.6, 0, 1)
+		body.GroupTransparency = 1 - math.clamp(alpha * 1.6, 0, 1) * (1 - self._elemT)
 	end
 	local anim = animator(alpha, function(v)
 		alpha = v
 		apply()
 	end)
 	arrow.Rotation = data.Open and 0 or 180
+
+	data.Refresh = apply
 
 	function data.Fit()
 		local content = layout.AbsoluteContentSize.Y + 14
@@ -2145,7 +2283,7 @@ function Library:Tab(name, icon)
 		BackgroundTransparency = 1,
 		GroupTransparency = 1,
 		Visible = false,
-		Parent = self.Content,
+		Parent = self._pages,
 	})
 	local scroller = new("ScrollingFrame", {
 		Size = UDim2.fromScale(1, 1),
@@ -3764,6 +3902,26 @@ function Library:CreateSettingsTab()
 		Default = self.BackgroundStyle,
 		Callback = function(v)
 			self:SetBackground(v)
+		end,
+	})
+
+	local elements = tab:Module({
+		Name = "Elements Transparency",
+		Description = "Fade elements over a background",
+		Default = self.ElementOverride,
+		HideInArray = true,
+		Callback = function(on)
+			self:SetElementTransparencyOverride(on)
+		end,
+	})
+	elements:Slider({
+		Name = "Transparency",
+		Min = 0,
+		Max = 0.9,
+		Default = self.ElementTransparency,
+		Increment = 0.05,
+		Callback = function(v)
+			self:SetElementTransparency(v)
 		end,
 	})
 	return tab
