@@ -2,11 +2,11 @@
 
 A dark, grey, Minecraft-client style UI library for Roblox, shipped as a **single LocalScript** (`main.lua`).
 
-**Build 3 · v1**
+**Build 4 · v1**
 
 - Three display modes you can switch between at any time: a **2D** window, a **3D** hub that floats in front of your character, and floating **Tabs** panels along the top of the screen
 - Modules with smooth expanding settings, toggles, sliders, dropdowns (single or multi-select), buttons, keybinds and labels
-- A floating **island** at the top of the screen: clock, show/hide button, mode button, and a live FPS / ping readout
+- A built-in floating **island** at the top middle of the screen: your local time with a blinking colon, a show/hide button, a mode button beside it, and a live FPS / ping readout on the other side. The library builds it itself, so nothing has to exist in `StarterGui`
 - Notifications with a pulsing outline, a draining time bar and a close button
 - Array list of enabled modules
 - Automatic scaling and positioning for different screen sizes
@@ -19,21 +19,17 @@ A dark, grey, Minecraft-client style UI library for Roblox, shipped as a **singl
 
 The script builds its own GUI at runtime and only ever creates one hub per client, so it is safe in `StarterGui` (which is re-cloned on respawn).
 
-### The island (optional)
+### The island
 
-The clock, show/hide button, mode button and FPS/ping readout are attached to a floating island that you design yourself. The library looks for this structure in `StarterGui`:
+The island is created by the library: a dark rounded bar centred at the top of the screen with the title, the clock and the show/hide arrow. The **Mode** button sits 10 px to its left and the **FPS / PING** readout 10 px to its right. Clicking the arrow shows or hides the whole hub, and the arrow flips and dims while it's hidden.
 
-```
-StarterGui
-└── root          (ScreenGui, IgnoreGuiInset = true)
-    └── Island    (Frame)
-        ├── time      (TextLabel)   -- gets the clock
-        └── ...       (ImageButton) -- toggles the hub and rotates as it does
+If you'd rather use your own design, pass a frame in and the library will wire it up instead of creating one:
+
+```lua
+Library.new({ Island = myFrame })   -- needs a TextLabel named "time" and an ImageButton inside it
 ```
 
-If it isn't there, the hub still works; you just won't have those four extras and can use the keybind and the pill in the window's title bar instead. To use a different island, pass it in: `Library.new({ Island = myFrame })`.
-
-The island is centred on the screen and the mode button and stats sit 10 px either side of it. The notification close button loads `rbxassetid://116396312853810`, so that asset must be available to your experience.
+The arrow icon is `rbxassetid://134387593103194`; change it with `IslandIcon = "rbxassetid://..."`. The notification close button loads `rbxassetid://116396312853810`. Both assets must be available to your experience.
 
 ## Display modes
 
@@ -84,9 +80,19 @@ local UI = Library.new({
     ArrayList = true,                   -- list of enabled modules, top right
     Stats = true,                       -- FPS / ping next to the island
     Island = nil,                       -- optional: your own island Frame
+    IslandIcon = "rbxassetid://134387593103194", -- arrow on the island's show / hide button
+
+    -- Advanced
+    Secure = false,                     -- true = parent to CoreGui instead of PlayerGui (see below)
 })
 UI:CreateSettingsTab()                  -- built-in Settings tab (mode, scale, 3D placement, theme)
 ```
+
+#### Advanced: `Secure`
+
+With `Secure = true` (or `Advanced = { Secure = true }`) every GUI the library makes, including the 3D hub's `SurfaceGui`, is parented to `CoreGui` instead of the player's `PlayerGui`.
+
+Roblox only allows certain contexts to parent into CoreGui (plugins and some elevated environments). A regular `LocalScript` can't, so in that case the library prints one warning, `[CIALib] Secure is on but CoreGui can't be used from this context; using PlayerGui instead`, and carries on in PlayerGui rather than failing.
 
 ### API
 

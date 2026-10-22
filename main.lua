@@ -1,10 +1,11 @@
 --[[
-	CIALib v1  |  Build 3
+	CIALib v1  |  Build 4
 	Single-script build of the Minecraft-client style UI library.
 
 	Modes   : 2D (window), 3D (floating hub in front of your character), Tabs (floating panels along the top)
 	Controls: Toggle, Slider, Dropdown (single / multi), Button, Keybind, Label
-	Extras  : floating island clock + show/hide button, mode button, FPS / ping readout, notifications, array list
+	Extras  : built-in floating island (clock, show/hide button), mode button, FPS / ping readout, notifications, array list
+	Advanced: Library.new({ Secure = true }) parents everything to CoreGui instead of PlayerGui (where the context allows it)
 
 	Usage after load (this script exposes itself on `shared.CIALib`):
 		local UI = shared.CIALib.UI
@@ -14,7 +15,7 @@
 		UI:Notify({ Title = "Hi", Content = "Hello", Type = "Success" })
 ]]
 
-local BUILD = 3
+local BUILD = 4
 local VERSION = "v1"
 
 -- only ever one hub per client (this script is re-cloned from StarterGui on respawn)
@@ -57,6 +58,7 @@ local PPS = 70 -- canvas pixels per stud when the 3D hub is at scale 1
 -- floating "Tabs" mode (one panel per tab, laid out left to right along the top)
 local PANEL_HEAD, PANEL_Y, PANEL_GAP, PANEL_MARGIN = 38, 64, 8, 12
 local TOP_SAFE = 60 -- keep the 2D window below the island row
+local ISLAND_ICON = "rbxassetid://134387593103194" -- arrow on the island's show / hide button
 local MODES = { ["2D"] = true, ["3D"] = true, Tabs = true }
 local MODE_ORDER = { "2D", "3D", "Tabs" }
 
@@ -264,6 +266,9 @@ function Library.new(config)
 	self.Scale3D = 1.2
 	self.ShowArrayList = config.ArrayList ~= false
 	self.ShowStats = config.Stats ~= false
+	-- Advanced: Secure = true parents everything to CoreGui instead of PlayerGui (also accepted as Advanced.Secure)
+	self.Secure = config.Secure == true or (type(config.Advanced) == "table" and config.Advanced.Secure == true)
+	self.IslandIcon = config.IslandIcon or ISLAND_ICON
 	self.ToggleNotifications = true
 	self.Rainbow = false
 	self.Tabs = {}
@@ -282,7 +287,7 @@ function Library.new(config)
 	self:_buildWindow()
 	self:_buildOverlays()
 	self:_watchViewport()
-	task.spawn(self._buildIsland, self, config.Island)
+	self:_buildIsland(config.Island)
 	self:_connectInput()
 
 	self:SetVisible(true)
@@ -308,15 +313,32 @@ function Library:SetAccent(color)
 end
 
 function Library:_buildGui()
-	local playerGui = LocalPlayer:WaitForChild("PlayerGui")
-	self.Gui = new("ScreenGui", {
+	local gui = new("ScreenGui", {
 		Name = "CIALib",
 		ResetOnSpawn = false,
 		IgnoreGuiInset = true,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 		DisplayOrder = 1000,
-		Parent = playerGui,
 	})
+
+	-- Secure: live in CoreGui rather than PlayerGui. Roblox only lets some contexts parent there
+	-- (plugins, elevated executors), so fall back to PlayerGui instead of failing outright.
+	local root
+	if self.Secure then
+		local ok = pcall(function()
+			gui.Parent = game:GetService("CoreGui")
+		end)
+		if ok and gui.Parent then
+			root = gui.Parent
+		else
+			warn("[CIALib] Secure is on but CoreGui can't be used from this context; using PlayerGui instead")
+		end
+	end
+	if not root then
+		root = LocalPlayer:WaitForChild("PlayerGui")
+		gui.Parent = root
+	end
+	self.Gui, self.GuiRoot = gui, root
 end
 
 -- window ------------------------------------------------------------------
@@ -830,7 +852,7 @@ function Library:_enter3D()
 		ResetOnSpawn = false,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 		Enabled = self.Visible,
-		Parent = LocalPlayer:WaitForChild("PlayerGui"),
+		Parent = self.GuiRoot,
 	})
 
 	self._part, self._rig, self._surface = part, rig, surface
@@ -2086,20 +2108,60 @@ end
 
 -- floating island: visibility button + live clock ---------------------------------
 
+-- the island is built here, so nothing has to exist in StarterGui. Pass config.Island to use your own frame instead
+-- (it needs a `time` TextLabel and an ImageButton, like the default one).
+function Library:_createIsland()
+	local island = new("Frame", {
+		Name = "Island",
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 24),
+		Size = UDim2.fromOffset(192, 32),
+		BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+		ZIndex = 40,
+		Parent = self.Gui,
+	})
+	corner(island, 8)
+	stroke(island, Color3.fromRGB(42, 42, 42), 2.2)
+	new("TextLabel", {
+		Name = "Title",
+		Text = self.Title,
+		FontFace = FONT_BOLD,
+		TextScaled = true,
+		TextColor3 = Color3.new(1, 1, 1),
+		Position = UDim2.fromOffset(9, 3),
+		Size = UDim2.fromOffset(49, 26),
+		Parent = island,
+	})
+	new("TextLabel", {
+		Name = "time",
+		Text = "0:00 AM",
+		FontFace = FONT_BOLD,
+		TextScaled = true,
+		TextColor3 = Color3.new(1, 1, 1),
+		Position = UDim2.fromOffset(58, 11),
+		Size = UDim2.fromOffset(59, 16),
+		Parent = island,
+	})
+	local toggle = new("ImageButton", {
+		Name = "Visible",
+		Image = self.IslandIcon,
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 0.9,
+		Position = UDim2.fromOffset(160, 4),
+		Size = UDim2.fromOffset(23, 23),
+		Parent = island,
+	})
+	corner(toggle, 8)
+	return island
+end
+
 function Library:_buildIsland(island)
-	if not island then
-		-- StarterGui may not have been copied into PlayerGui yet, so wait for it
-		local root = LocalPlayer:WaitForChild("PlayerGui"):WaitForChild("root", 10)
-		island = root and root:WaitForChild("Island", 5)
-	end
-	if not island then
-		return
-	end
+	island = island or self:_createIsland()
 	self.Island = island
 
-	-- keep the island alive across respawns and draw it above the hub
+	-- a custom island that lives in its own ScreenGui is kept alive across respawns and drawn above the hub
 	local screen = island:FindFirstAncestorOfClass("ScreenGui")
-	if screen then
+	if screen and screen ~= self.Gui then
 		screen.ResetOnSpawn = false
 		screen.DisplayOrder = self.Gui.DisplayOrder + 1
 	end
@@ -2719,6 +2781,7 @@ local UI = Library.new({
 	Title = "CIA",
 	Version = VERSION,
 	Keybind = Enum.KeyCode.RightShift,
+	-- Advanced: Secure = true,  -- parent to CoreGui instead of PlayerGui (only where scripts may use CoreGui)
 })
 
 UI:CreateSettingsTab()
