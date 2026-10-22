@@ -2,12 +2,13 @@
 
 A dark, grey, Minecraft-client style UI library for Roblox, shipped as a **single LocalScript** (`main.lua`).
 
-**Build 6 · v1**
+**Build 7 · v1**
 
 - Three display modes you can switch between at any time: a **2D** window, a **3D** hub that floats in front of your character, and floating **Tabs** panels along the top of the screen
 - Modules with smooth expanding settings, toggles, sliders, dropdowns (single or multi-select), buttons, keybinds and labels
 - A built-in floating **island** at the top middle of the screen: your local time with a blinking colon, a show/hide button, a mode button beside it, and a live FPS / ping readout on the other side. The library builds it itself, so nothing has to exist in `StarterGui`
-- **Interactive Elements**: switching a toggle on plays an effect from the toggle, in the theme colour, that stays inside its tab (Ripple, 1's and 0's, or Glass Crack)
+- **Interactive Elements**: flipping a toggle on or off plays an effect from exactly where you clicked, in the theme colour, that stays inside its tab (Ripple, 1's and 0's, or Glass Crack). It has its own **When On** / **When Off** switches
+- **Custom Backgrounds**: animated backdrops for every tab in 2D, 3D and Tabs mode: Waves, Stormy Night (rain, splashes, lightning) and Cherry Blossom
 - Notifications with a pulsing outline, a draining time bar and a close button
 - Array list of enabled modules
 - Automatic scaling and positioning for different screen sizes
@@ -82,8 +83,12 @@ local UI = Library.new({
     Stats = true,                       -- FPS / ping next to the island
     Island = nil,                       -- optional: your own island Frame
     IslandIcon = "rbxassetid://134387593103194", -- arrow on the island's show / hide button
-    InteractiveElements = true,         -- toggles play an effect when switched on
+    InteractiveElements = true,         -- toggles play an effect from where you click
     EffectAnimation = "Ripple",         -- "Ripple" | "1's and 0's" | "Glass Crack"
+    EffectWhenOn = true,                -- ...when a toggle is switched on
+    EffectWhenOff = true,               -- ...when a toggle is switched off
+    CustomBackgrounds = false,          -- animated backdrop behind every tab
+    Background = "Waves",               -- "Waves" | "Stormy Night" | "Cherry Blossom"
 
     -- Advanced
     Secure = false,                     -- true = parent to CoreGui instead of PlayerGui (see below)
@@ -93,15 +98,35 @@ UI:CreateSettingsTab()                  -- built-in Settings tab (mode, scale, 3
 
 #### Interactive Elements
 
-Found in **Settings → Theme**. With **Interactive Elements** on (the default), switching a toggle on, or turning a module on with a click, plays an effect that starts at that toggle. **Effect Animation** picks which one:
+A toggle in the **Settings** tab that holds its own configs: switch it on or off, and right-click it (or use its arrow) to open them.
+
+| Config | What it does |
+| --- | --- |
+| **Effect Animation** | Which effect plays (below). `Ripple` is the default. |
+| **When On** | Play the effect when a toggle is switched **on** (default on). |
+| **When Off** | Play the effect when a toggle is switched **off** (default on). |
+
+Clicking a toggle (or clicking a module on or off) plays the effect **from the exact spot you clicked**, in the theme colour. If the click didn't come from the pointer (a script, a keybind) it starts from the middle of the toggle instead.
 
 | Effect | What it does |
 | --- | --- |
-| `Ripple` (default) | Rings in the theme colour spread out from the toggle and fade away. |
-| `1's and 0's` | A burst of 1s and 0s is thrown out of the toggle, scrambling as they fly, then fading. |
-| `Glass Crack` | Procedurally generated cracks in the theme colour jump outward from the toggle in steps, with forks, then break up and fade in irregular beats like shattering glass. |
+| `Ripple` | Rings spread out from the click and fade away. |
+| `1's and 0's` | A burst of 1s and 0s is thrown out of the click, scrambling as they fly, then fading. |
+| `Glass Crack` | Procedurally generated cracks jump outward from the click in steps, with forks, then break up and fade in irregular beats like shattering glass. |
 
-Effects are drawn on a clipped layer covering just that tab's content area (the panel body in Tabs mode), so they can't escape it. Switching a toggle *off* plays nothing, and neither do changes made from code. Set the defaults with `InteractiveElements = false` and `EffectAnimation = "Glass Crack"` in `Library.new`, or play one yourself with `UI:PlayEffect(guiObject, tab)`.
+Effects are drawn on a clipped layer covering just that tab's content area (the panel body in Tabs mode), so they can't escape it. Changes made from code don't play them. Set the defaults with `InteractiveElements`, `EffectAnimation`, `EffectWhenOn` and `EffectWhenOff` in `Library.new`, or play one yourself with `UI:PlayEffect(origin, tab)`.
+
+#### Custom Backgrounds
+
+Another toggle in **Settings**, with a **Background** dropdown. It puts an animated backdrop behind every tab: the window in 2D and 3D, and each panel in Tabs mode. It is off by default.
+
+| Background | What it does |
+| --- | --- |
+| `Waves` | Water that swells up and down on a spring model; random impulses send waves racing along the surface and sloshing back. Tinted with the theme colour. |
+| `Stormy Night` | A dark night with rain that falls at a slant and splashes at the bottom of the tab, each splash leaving a puddle that fades out quickly, and random lightning that strikes with a jagged bolt and a choppy double flash that lights the whole tab. |
+| `Cherry Blossom` | Blocky, pixel-art cherry trees on a grass strip. Petals drift off the canopies with a smooth left-and-right sway, land and stop, then fade away. |
+
+Turn it on from code with `CustomBackgrounds = true` and `Background = "Stormy Night"` in `Library.new`, or `UI:SetBackgroundEnabled(true)` and `UI:SetBackground("Waves")`.
 
 #### Advanced: `Secure`
 
@@ -120,6 +145,8 @@ Roblox only allows certain contexts to parent into CoreGui (plugins and some ele
 | `UI:Notify({ Title, Content, Type, Duration })` | `Type` is `Info` (default, uses the accent), `Success`, `Warning` or `Error`. Returns `{ Close = function }`. |
 | `UI:SetMode("2D" \| "3D" \| "Tabs")` | Switch display mode. |
 | `UI:SetVisible(bool)` / `UI:Toggle()` | Show or hide the hub. |
+| `UI:SetBackgroundEnabled(bool)` / `UI:SetBackground(name)` | Turn Custom Backgrounds on or off, or pick `"Waves"`, `"Stormy Night"` or `"Cherry Blossom"`. |
+| `UI:PlayEffect(origin, tab)` | Play the current Interactive Elements effect from a GuiObject or a screen position inside `tab`'s space. |
 | `UI:SetPanelOpen(tab, bool)` | Collapse or open a tab's panel in Tabs mode (`tab` is the Tab object or its name). The state is remembered when you switch modes. |
 | `UI:SetAccent(Color3)` | Change the accent colour. Presets are in `Library.ACCENTS`. |
 | `UI:SetScale(n)` | Extra 2D scale on top of the automatic fit (0.5 – 1.5). |

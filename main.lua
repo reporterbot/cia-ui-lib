@@ -1,5 +1,5 @@
 --[[
-	CIALib v1  |  Build 6
+	CIALib v1  |  Build 7
 	Single-script build of the Minecraft-client style UI library.
 
 	Modes   : 2D (window), 3D (floating hub in front of your character), Tabs (floating panels along the top)
@@ -15,7 +15,7 @@
 		UI:Notify({ Title = "Hi", Content = "Hello", Type = "Success" })
 ]]
 
-local BUILD = 6
+local BUILD = 7
 local VERSION = "v1"
 
 -- only ever one hub per client (this script is re-cloned from StarterGui on respawn)
@@ -60,7 +60,8 @@ local PANEL_HEAD, PANEL_Y, PANEL_GAP, PANEL_MARGIN = 38, 64, 8, 12
 local TOP_SAFE = 60 -- keep the 2D window below the island row
 local ISLAND_ICON = "rbxassetid://134387593103194" -- arrow on the island's show / hide button
 local PANEL_ARROW = "rbxassetid://134161790366779" -- collapse arrow on each Tabs-mode panel
-local EFFECT_NAMES = { "Ripple", "1's and 0's", "Glass Crack" } -- Settings > Theme > Effect Animation
+local EFFECT_NAMES = { "Ripple", "1's and 0's", "Glass Crack" } -- Interactive Elements > Effect Animation
+local BACKGROUND_NAMES = { "Waves", "Stormy Night", "Cherry Blossom" } -- Custom Backgrounds > Background
 local MODES = { ["2D"] = true, ["3D"] = true, Tabs = true }
 local MODE_ORDER = { "2D", "3D", "Tabs" }
 
@@ -274,6 +275,12 @@ function Library.new(config)
 	-- toggles play an effect from where they are switched on (Settings > Theme)
 	self.InteractiveElements = config.InteractiveElements ~= false
 	self.EffectStyle = config.EffectAnimation or "Ripple"
+	self.EffectWhenOn = config.EffectWhenOn ~= false -- play the effect when a toggle is switched on
+	self.EffectWhenOff = config.EffectWhenOff ~= false -- ...and when it is switched off
+	-- Custom Backgrounds: an animated backdrop behind every tab (window / 3D hub) and every Tabs-mode panel
+	self.BackgroundsEnabled = config.CustomBackgrounds == true
+	self.BackgroundStyle = config.Background or "Waves"
+	self._bgLayers = {}
 	self.ToggleNotifications = true
 	self.Rainbow = false
 	self.Tabs = {}
@@ -291,6 +298,7 @@ function Library.new(config)
 	self:_buildGui()
 	self:_buildWindow()
 	self:_buildOverlays()
+	self:_startBackgrounds()
 	self:_watchViewport()
 	self:_buildIsland(config.Island)
 	self:_connectInput()
@@ -548,6 +556,34 @@ function Library:_buildWindow()
 		ClipsDescendants = true,
 		ZIndex = 50,
 		Parent = self.Content,
+	})
+
+	-- custom background layers: Back sits behind the tab pages, Front is a lighting layer above them
+	local bgBack = new("Frame", {
+		Name = "BGBack",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		ClipsDescendants = true,
+		ZIndex = 0,
+		Parent = self.Content,
+	})
+	local bgFront = new("Frame", {
+		Name = "BGFront",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		ClipsDescendants = true,
+		ZIndex = 40,
+		Parent = self.Content,
+	})
+	self:_registerBg({
+		Back = bgBack,
+		Front = bgFront,
+		Scale = function()
+			return self._uiScale.Scale
+		end,
+		Active = function()
+			return self.Mode ~= "Tabs"
+		end,
 	})
 
 	-- dragging (2D only)
@@ -1155,6 +1191,591 @@ function Library:PlayEffect(origin, tab)
 	end
 end
 
+-- where the user actually clicked, in the same coordinate space as the GUI (falls back to the element's centre
+-- when the click didn't come from the pointer, e.g. a script or a keybind)
+function Library:_clickPoint(element)
+	local p
+	if self.Mode == "3D" then
+		p = self:GetPointer()
+	else
+		local ok, origin = pcall(function()
+			return self.Gui.AbsolutePosition
+		end)
+		p = UserInputService:GetMouseLocation() + (ok and origin or Vector2.zero)
+	end
+	local a, s = element.AbsolutePosition, element.AbsoluteSize
+	if p and p.X >= a.X and p.X <= a.X + s.X and p.Y >= a.Y and p.Y <= a.Y + s.Y then
+		return p
+	end
+	return a + s / 2
+end
+
+-- a toggle was clicked: play the effect from the click, for switching on and / or off (When On / When Off)
+function Library:PlayToggleEffect(on, element, tab)
+	if on and not self.EffectWhenOn then
+		return
+	end
+	if not on and not self.EffectWhenOff then
+		return
+	end
+	self:PlayEffect(self:_clickPoint(element), tab)
+end
+
+-- custom backgrounds ------------------------------------------------------------
+-- Each background is a function (self, layer) -> { Step = function(dt, now, w, h) }. `layer` has a Back frame
+-- (behind the tab content) and a Front frame (lighting above it); w and h are the layer's size in design pixels.
+-- Layers are registered by the window and by every Tabs-mode panel, and are only stepped while they are on screen.
+
+local BACKGROUNDS = {}
+
+-- water that swells up and down: two rows of columns on a spring / neighbour-coupling model, kicked by random
+-- impulses so waves race along the surface and slosh back
+BACKGROUNDS["Waves"] = function(self, L)
+	local rng = Random.new()
+	local width = math.max(L.Back.AbsoluteSize.X / math.max(L.Scale(), 0.05), 215)
+	local N = math.clamp(math.floor(width / 5), 30, 110)
+
+	-- opaque water, shaded from the theme colour over the dark backdrop (semi-transparent columns would show
+	-- seams where they overlap)
+	local DARK = Color3.fromRGB(17, 17, 17)
+	local function row(mix, crestMix, z)
+		local bars, crests = {}, {}
+		for i = 1, N do
+			local bar = new("Frame", {
+				AnchorPoint = Vector2.new(0, 1),
+				Position = UDim2.fromScale((i - 1) / N, 1),
+				Size = UDim2.new(1 / N, 1, 0, 0),
+				BackgroundColor3 = DARK:Lerp(self.Accent, mix),
+				ZIndex = z,
+				Parent = L.Back,
+			})
+			crests[i] = new("Frame", {
+				Size = UDim2.new(1, 0, 0, 2),
+				BackgroundColor3 = DARK:Lerp(self.Accent, crestMix),
+				Parent = bar,
+			})
+			bars[i] = bar
+		end
+		local h, v = table.create(N, 0), table.create(N, 0)
+		return { bars = bars, crests = crests, h = h, v = v, mix = mix, crestMix = crestMix }
+	end
+
+	local rows = {
+		{ r = row(0.16, 0.38, 1), base = 0.30, amp = 0.08, omega = 1.0, phase = 0 },
+		{ r = row(0.27, 0.58, 2), base = 0.20, amp = 0.10, omega = 1.5, phase = 1.7 },
+	}
+	for _, w in ipairs(rows) do
+		for i = 1, N do
+			w.r.h[i] = w.base
+		end
+	end
+
+	local K, C, SPREAD = 14, 1.6, 260 -- spring pull to the tide, damping, how strongly neighbours drag each other
+	local acc, kick, color = 0, 0.4, self.Accent
+
+	local function simulate(dt, now)
+		for _, w in ipairs(rows) do
+			local h, v = w.r.h, w.r.v
+			for i = 1, N do
+				-- the tide heaves the whole surface, and its phase shifts along the row so a swell rolls across it
+				local level = w.base + w.amp * math.sin(now * w.omega + w.phase + i * 0.22)
+				local left, right = h[i - 1] or h[i], h[i + 1] or h[i]
+				v[i] += (K * (level - h[i]) - C * v[i] + SPREAD * (left + right - 2 * h[i])) * dt
+			end
+			for i = 1, N do
+				h[i] = math.clamp(h[i] + v[i] * dt, 0.04, 0.88)
+			end
+		end
+	end
+
+	return {
+		Step = function(dt, now)
+			acc += dt
+			local steps = 0
+			while acc >= 1 / 60 and steps < 4 do
+				acc -= 1 / 60
+				steps += 1
+				simulate(1 / 60, now)
+			end
+			if steps == 4 then
+				acc = 0
+			end
+
+			-- a sudden woosh: a random column on a random row gets shoved and the wave runs along the surface
+			kick -= dt
+			if kick <= 0 then
+				kick = rng:NextNumber(0.9, 2.2)
+				local w = rows[rng:NextInteger(1, #rows)]
+				w.r.v[rng:NextInteger(1, N)] += rng:NextNumber(1.1, 2.0) * (rng:NextNumber() < 0.5 and -1 or 1)
+			end
+
+			local recolor = color ~= self.Accent
+			color = self.Accent
+			for _, w in ipairs(rows) do
+				local r = w.r
+				for i = 1, N do
+					r.bars[i].Size = UDim2.new(1 / N, 1, r.h[i], 0)
+					if recolor then
+						r.bars[i].BackgroundColor3 = DARK:Lerp(color, r.mix)
+						r.crests[i].BackgroundColor3 = DARK:Lerp(color, r.crestMix)
+					end
+				end
+			end
+		end,
+	}
+end
+
+-- rain that streaks down and splashes into short-lived puddles, with the odd lightning strike that lights the tab
+BACKGROUNDS["Stormy Night"] = function(self, L)
+	local rng = Random.new()
+	local back, front = L.Back, L.Front
+
+	local night = new("Frame", {
+		Name = "Night",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = Color3.fromRGB(5, 8, 20),
+		BackgroundTransparency = 0.5,
+		ZIndex = 0,
+		Parent = back,
+	})
+	new("UIGradient", {
+		Rotation = 90,
+		Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 0.55) }),
+		Parent = night,
+	})
+	local flash = new("Frame", {
+		Name = "Flash",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = Color3.fromRGB(205, 222, 255),
+		BackgroundTransparency = 1,
+		Parent = front,
+	})
+
+	local RAIN, SPLASH = Color3.fromRGB(170, 196, 238), Color3.fromRGB(150, 182, 228)
+	local drops, free = {}, {}
+	for i = 1, 70 do
+		local d = {
+			on = false,
+			f = new("Frame", {
+				Size = UDim2.fromOffset(2, rng:NextInteger(7, 12)),
+				BackgroundColor3 = RAIN,
+				BackgroundTransparency = 0.35,
+				Visible = false,
+				ZIndex = 2,
+				Parent = back,
+			}),
+		}
+		drops[i] = d
+		free[i] = d
+	end
+	local puddles, parts = {}, {}
+	for i = 1, 22 do
+		local f = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 1),
+			BackgroundColor3 = SPLASH,
+			Visible = false,
+			ZIndex = 2,
+			Parent = back,
+		})
+		new("UICorner", { CornerRadius = UDim.new(0.5, 0), Parent = f })
+		puddles[i] = { on = false, f = f }
+	end
+	for i = 1, 90 do
+		parts[i] = {
+			on = false,
+			f = new("Frame", {
+				Size = UDim2.fromOffset(2, 2),
+				BackgroundColor3 = SPLASH,
+				Visible = false,
+				ZIndex = 3,
+				Parent = back,
+			}),
+		}
+	end
+
+	local function take(pool)
+		for _, o in ipairs(pool) do
+			if not o.on then
+				return o
+			end
+		end
+	end
+
+	local function splash(x, ground)
+		local p = take(puddles)
+		if p then
+			p.on, p.x, p.t, p.f.Visible = true, x, 0, true
+		end
+		for _ = 1, rng:NextInteger(3, 5) do
+			local s = take(parts)
+			if s then
+				s.on, s.x, s.y = true, x, ground - 2
+				s.vx, s.vy = rng:NextNumber(-70, 70), -rng:NextNumber(90, 170)
+				s.life, s.max = 0, rng:NextNumber(0.28, 0.5)
+				s.f.Visible = true
+			end
+		end
+	end
+
+	-- lightning: a jagged bolt for a moment, and a choppy double flash that lights the whole tab
+	local strike = nil -- seconds since the strike started
+	local function bolt(w, h)
+		local x, y, ang = rng:NextNumber(0.15, 0.85) * w, 0, 90 + rng:NextNumber(-12, 12)
+		local made, goal = {}, h * rng:NextNumber(0.65, 0.95)
+		local function seg(sx, sy, sa, len, th)
+			local a = math.rad(sa)
+			local nx, ny = sx + math.cos(a) * len, sy + math.sin(a) * len
+			table.insert(made, new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromOffset((sx + nx) / 2, (sy + ny) / 2),
+				Size = UDim2.fromOffset(len + 1, th),
+				Rotation = sa,
+				BackgroundColor3 = Color3.fromRGB(232, 240, 255),
+				ZIndex = 5,
+				Parent = front,
+			}))
+			return nx, ny
+		end
+		local guard = 0
+		while y < goal and guard < 40 do
+			guard += 1
+			ang = 90 + rng:NextNumber(-34, 34)
+			local fx, fy = x, y
+			x, y = seg(x, y, ang, rng:NextNumber(16, 30), 3)
+			if rng:NextNumber() < 0.22 then
+				local bx, by, ba = fx, fy, ang + (rng:NextNumber() < 0.5 and -1 or 1) * rng:NextNumber(25, 55)
+				for _ = 1, rng:NextInteger(2, 4) do
+					bx, by = seg(bx, by, ba, rng:NextNumber(12, 22), 1.5)
+					ba += rng:NextNumber(-20, 20)
+				end
+			end
+		end
+		task.delay(0.12, function()
+			for _, f in ipairs(made) do
+				f.BackgroundTransparency = 0.55
+			end
+		end)
+		task.delay(0.22, function()
+			for _, f in ipairs(made) do
+				f:Destroy()
+			end
+		end)
+	end
+	local function envelope(tt)
+		if tt < 0.06 then
+			return 0.9
+		elseif tt < 0.11 then
+			return 0.25
+		elseif tt < 0.2 then
+			return 1
+		end
+		return math.max(0, 1 - (tt - 0.2) / 0.5)
+	end
+
+	local spawnAcc, nextBolt = 0, rng:NextNumber(2.5, 5)
+
+	return {
+		Step = function(dt, now, w, h)
+			-- rain
+			spawnAcc += dt * math.max(w, 120) * 0.16
+			while spawnAcc >= 1 do
+				spawnAcc -= 1
+				local d = take(drops)
+				if not d then
+					break
+				end
+				d.on, d.x, d.y = true, rng:NextNumber(0, w + 90), -12
+				d.vx, d.vy = -rng:NextNumber(60, 110), rng:NextNumber(420, 640)
+				d.f.Rotation = math.deg(math.atan2(-d.vx, d.vy))
+				d.f.Visible = true
+			end
+			for _, d in ipairs(drops) do
+				if d.on then
+					d.x += d.vx * dt
+					d.y += d.vy * dt
+					if d.y >= h - 3 then
+						d.on, d.f.Visible = false, false
+						if d.x > 0 and d.x < w then
+							splash(d.x, h)
+						end
+					else
+						d.f.Position = UDim2.fromOffset(d.x, d.y)
+					end
+				end
+			end
+			-- puddles spread and fade out quickly
+			for _, p in ipairs(puddles) do
+				if p.on then
+					p.t += dt
+					local k = p.t / 0.5
+					if k >= 1 then
+						p.on, p.f.Visible = false, false
+					else
+						p.f.Size = UDim2.fromOffset(6 + 26 * k, 3)
+						p.f.Position = UDim2.fromOffset(p.x, h - 1)
+						p.f.BackgroundTransparency = 0.4 + 0.6 * k
+					end
+				end
+			end
+			-- splash droplets
+			for _, s in ipairs(parts) do
+				if s.on then
+					s.life += dt
+					if s.life >= s.max then
+						s.on, s.f.Visible = false, false
+					else
+						s.vy += 520 * dt
+						s.x += s.vx * dt
+						s.y += s.vy * dt
+						s.f.Position = UDim2.fromOffset(s.x, s.y)
+						s.f.BackgroundTransparency = 0.1 + 0.9 * (s.life / s.max)
+					end
+				end
+			end
+			-- lightning
+			nextBolt -= dt
+			if nextBolt <= 0 then
+				nextBolt = rng:NextNumber(4, 9)
+				strike = 0
+				bolt(w, h)
+			end
+			if strike then
+				strike += dt
+				local e = envelope(strike)
+				flash.BackgroundTransparency = 1 - 0.26 * e
+				night.BackgroundTransparency = 0.5 + 0.35 * e
+				if strike > 0.75 then
+					strike = nil
+					flash.BackgroundTransparency = 1
+					night.BackgroundTransparency = 0.5
+				end
+			end
+		end,
+	}
+end
+
+-- a blocky cherry grove: pixel trees along the ground, petals that sway down and rest on the grass before fading
+BACKGROUNDS["Cherry Blossom"] = function(self, L)
+	local rng = Random.new()
+	local back = L.Back
+	local scale = math.max(L.Scale(), 0.05)
+	local W0 = math.max(back.AbsoluteSize.X / scale, 215)
+	local H0 = back.AbsoluteSize.Y / scale
+	if H0 < 120 then
+		H0 = 160
+	end
+	local cell = math.clamp(math.floor(H0 / 28), 6, 14) -- size of one "block"
+
+	local PINKS = {
+		Color3.fromRGB(255, 183, 197),
+		Color3.fromRGB(247, 150, 178),
+		Color3.fromRGB(255, 214, 224),
+		Color3.fromRGB(240, 128, 160),
+	}
+	local TRUNK, TRUNK_DARK, GROUND = Color3.fromRGB(112, 76, 82), Color3.fromRGB(88, 58, 66), Color3.fromRGB(78, 106, 76)
+
+	new("Frame", {
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.fromScale(0, 1),
+		Size = UDim2.new(1, 0, 0, cell),
+		BackgroundColor3 = GROUND,
+		BackgroundTransparency = 0.35,
+		ZIndex = 1,
+		Parent = back,
+	})
+	for _ = 1, math.floor(W0 / 26) do -- petals already on the grass
+		new("Frame", {
+			AnchorPoint = Vector2.new(0, 1),
+			Position = UDim2.new(rng:NextNumber(), 0, 1, -rng:NextInteger(0, cell - 3)),
+			Size = UDim2.fromOffset(3, 2),
+			BackgroundColor3 = PINKS[rng:NextInteger(1, #PINKS)],
+			BackgroundTransparency = 0.25,
+			ZIndex = 2,
+			Parent = back,
+		})
+	end
+
+	local spawns = {} -- canopy blocks the petals fall from: { xScale, xOffset, blocksAboveGround }
+	local trees = math.clamp(math.floor(W0 / 130), 2, 6)
+	for n = 1, trees do
+		local xs = (n - 0.5) / trees + rng:NextNumber(-0.04, 0.04)
+		local th = rng:NextInteger(3, 5)
+		local ch = rng:NextInteger(4, 5)
+		local cw = ch + rng:NextInteger(2, 3)
+		local function block(cx, up, color)
+			new("Frame", {
+				AnchorPoint = Vector2.new(0, 1),
+				Position = UDim2.new(xs, cx * cell, 1, -(cell + up * cell)),
+				Size = UDim2.fromOffset(cell, cell),
+				BackgroundColor3 = color,
+				ZIndex = 2,
+				Parent = back,
+			})
+		end
+		for up = 0, th - 1 do
+			block(0, up, up % 2 == 0 and TRUNK or TRUNK_DARK)
+		end
+		block(-1, th - 1, TRUNK_DARK)
+		block(1, th - 2, TRUNK_DARK)
+		for r = 0, ch - 1 do
+			for c = 0, cw - 1 do
+				local nx = (c - (cw - 1) / 2) / (cw / 2)
+				local ny = (r - (ch - 1) / 2) / (ch / 2)
+				if nx * nx + ny * ny <= 1.25 and rng:NextNumber() < 0.88 then
+					local cx, up = c - math.floor(cw / 2), th + r - 1
+					block(cx, up, PINKS[rng:NextInteger(1, #PINKS)])
+					if rng:NextNumber() < 0.35 then
+						table.insert(spawns, { xs, cx * cell, up })
+					end
+				end
+			end
+		end
+	end
+
+	local leaves = {}
+	for i = 1, math.clamp(math.floor(W0 / 14), 14, 44) do
+		local size = rng:NextInteger(4, 6)
+		leaves[i] = {
+			state = "wait",
+			timer = rng:NextNumber(0, 5),
+			f = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Size = UDim2.fromOffset(size, size - 1),
+				BackgroundColor3 = PINKS[rng:NextInteger(1, #PINKS)],
+				Visible = false,
+				ZIndex = 4,
+				Parent = back,
+			}),
+		}
+	end
+
+	return {
+		Step = function(dt, now, w, h)
+			for _, lf in ipairs(leaves) do
+				local state = lf.state
+				if state == "wait" then
+					lf.timer -= dt
+					if lf.timer <= 0 then
+						local sp = spawns[rng:NextInteger(1, math.max(#spawns, 1))]
+						if sp then
+							lf.x0 = sp[1] * w + sp[2] + cell / 2 + rng:NextNumber(-3, 3)
+							lf.y = h - cell - sp[3] * cell
+						else
+							lf.x0, lf.y = rng:NextNumber(0, w), h * 0.3
+						end
+						lf.vy, lf.amp = rng:NextNumber(22, 38), rng:NextNumber(10, 24)
+						lf.omega, lf.phase, lf.drift = rng:NextNumber(1.2, 2.2), rng:NextNumber(0, math.pi * 2), rng:NextNumber(-8, 8)
+						lf.t0, lf.rest = now, rng:NextNumber(0, 5)
+						lf.f.BackgroundTransparency = 0.05
+						lf.f.Visible = true
+						lf.state = "fall"
+					end
+				elseif state == "fall" then
+					lf.y += lf.vy * dt
+					lf.x0 += lf.drift * dt
+					local wave = lf.omega * (now - lf.t0) + lf.phase
+					local ground = h - cell + lf.rest * 0.6 - 2
+					if lf.y >= ground then
+						-- landed: it stops where it hit and lies still
+						lf.y, lf.state, lf.timer = ground, "rest", rng:NextNumber(1.4, 2.6)
+						lf.f.Rotation = rng:NextNumber(-25, 25)
+					else
+						lf.f.Rotation = 28 * math.cos(wave)
+					end
+					lf.f.Position = UDim2.fromOffset(lf.x0 + lf.amp * math.sin(wave), lf.y)
+				elseif state == "rest" then
+					lf.timer -= dt
+					if lf.timer <= 0 then
+						lf.state, lf.fade = "fade", 0
+					end
+				else -- fade
+					lf.fade += dt / 1.1
+					if lf.fade >= 1 then
+						lf.f.Visible = false
+						lf.state, lf.timer = "wait", rng:NextNumber(0.5, 4)
+					else
+						lf.f.BackgroundTransparency = 0.05 + 0.95 * lf.fade
+					end
+				end
+			end
+		end,
+	}
+end
+
+function Library:_registerBg(L)
+	L.NeedsBuild = true
+	table.insert(self._bgLayers, L)
+end
+
+-- (re)build one layer's background; it only runs once the layer is on screen with a real size
+function Library:_buildBg(L)
+	L.Back:ClearAllChildren()
+	L.Front:ClearAllChildren()
+	L.State = nil
+	if not self.BackgroundsEnabled then
+		return
+	end
+	local make = BACKGROUNDS[self.BackgroundStyle] or BACKGROUNDS["Waves"]
+	local ok, state = pcall(make, self, L)
+	if ok then
+		L.State = state
+	else
+		warn("[CIALib] background error: " .. tostring(state))
+	end
+end
+
+function Library:_resetBackgrounds()
+	for _, L in ipairs(self._bgLayers) do
+		L.Back:ClearAllChildren()
+		L.Front:ClearAllChildren()
+		L.State = nil
+		L.NeedsBuild = true
+	end
+end
+
+function Library:SetBackground(name)
+	if not BACKGROUNDS[name] then
+		return
+	end
+	self.BackgroundStyle = name
+	self:_resetBackgrounds()
+end
+
+function Library:SetBackgroundEnabled(on)
+	self.BackgroundsEnabled = on and true or false
+	self:_resetBackgrounds()
+end
+
+function Library:_startBackgrounds()
+	self:_connect(RunService.Heartbeat, function(dt)
+		if not self.BackgroundsEnabled or not self.Visible then
+			return
+		end
+		dt = math.min(dt, 0.05)
+		local now = os.clock()
+		for _, L in ipairs(self._bgLayers) do
+			if L.Active() then
+				local s = math.max(L.Scale(), 0.05)
+				local size = L.Back.AbsoluteSize
+				local w, h = size.X / s, size.Y / s
+				if w >= 40 and h >= 60 then
+					if L.NeedsBuild then
+						L.NeedsBuild = false
+						self:_buildBg(L)
+					end
+					if L.State then
+						local ok, err = pcall(L.State.Step, dt, now, w, h)
+						if not ok then
+							warn("[CIALib] background error: " .. tostring(err))
+							L.State = nil
+						end
+					end
+				end
+			end
+		end
+	end)
+end
+
 -- floating tabs mode ---------------------------------------------------------
 -- every tab becomes its own panel; the panels sit side by side from the top left to the top right
 
@@ -1277,7 +1898,36 @@ function Library:_makePanel(tab)
 		ZIndex = 3,
 		Parent = panel,
 	})
+	-- custom background layers for this panel (behind the body / lighting above it, both under the header)
+	local bgBack = new("Frame", {
+		Name = "BGBack",
+		Position = UDim2.fromOffset(0, PANEL_HEAD + 2),
+		Size = UDim2.new(1, 0, 1, -(PANEL_HEAD + 2)),
+		BackgroundTransparency = 1,
+		ClipsDescendants = true,
+		ZIndex = 0,
+		Parent = panel,
+	})
+	local bgFront = new("Frame", {
+		Name = "BGFront",
+		Position = UDim2.fromOffset(0, PANEL_HEAD + 2),
+		Size = UDim2.new(1, 0, 1, -(PANEL_HEAD + 2)),
+		BackgroundTransparency = 1,
+		ClipsDescendants = true,
+		ZIndex = 2,
+		Parent = panel,
+	})
 	local data = { Panel = panel, Stroke = panelStroke, Scale = panelScale, Holder = holder, FX = fx, X = 0, Open = tab._panelOpen ~= false }
+	self:_registerBg({
+		Back = bgBack,
+		Front = bgFront,
+		Scale = function()
+			return panelScale.Scale
+		end,
+		Active = function()
+			return self.Mode == "Tabs" and data.Open
+		end,
+	})
 
 	-- alpha: 1 = dropped open, 0 = collapsed into the header
 	local alpha = data.Open and 1 or 0
@@ -1738,9 +2388,7 @@ function Tab:Module(opts)
 	header.MouseButton1Click:Connect(function()
 		if m.Toggleable then
 			m:Set(not m.Enabled)
-			if m.Enabled then
-				lib:PlayEffect(header.AbsolutePosition + Vector2.new(header.AbsoluteSize.X * 0.12, header.AbsoluteSize.Y / 2), self)
-			end
+			lib:PlayToggleEffect(m.Enabled, header, self)
 		else
 			m:SetOpen(not m.Open)
 		end
@@ -1907,9 +2555,7 @@ function Module:Toggle(o)
 	end
 	hit.MouseButton1Click:Connect(function()
 		ctrl:Set(not state)
-		if state then
-			lib:PlayEffect(pill, self.Tab)
-		end
+		lib:PlayToggleEffect(state, root, self.Tab)
 	end)
 	return ctrl
 end
@@ -3069,19 +3715,55 @@ function Library:CreateSettingsTab()
 			self.Rainbow = v
 		end,
 	})
-	theme:Toggle({
+
+	-- toggles that carry their own settings: switch them on / off, right-click (or the arrow) for the configs
+	local interactive = tab:Module({
 		Name = "Interactive Elements",
+		Description = "Effects when you flip toggles",
 		Default = self.InteractiveElements,
-		Callback = function(v)
-			self.InteractiveElements = v
+		HideInArray = true,
+		Callback = function(on)
+			self.InteractiveElements = on
 		end,
 	})
-	theme:Dropdown({
+	interactive:Dropdown({
 		Name = "Effect Animation",
 		Options = EFFECT_NAMES,
 		Default = self.EffectStyle,
 		Callback = function(v)
 			self.EffectStyle = v
+		end,
+	})
+	interactive:Toggle({
+		Name = "When On",
+		Default = self.EffectWhenOn,
+		Callback = function(v)
+			self.EffectWhenOn = v
+		end,
+	})
+	interactive:Toggle({
+		Name = "When Off",
+		Default = self.EffectWhenOff,
+		Callback = function(v)
+			self.EffectWhenOff = v
+		end,
+	})
+
+	local backgrounds = tab:Module({
+		Name = "Custom Backgrounds",
+		Description = "Animated backdrop for every tab",
+		Default = self.BackgroundsEnabled,
+		HideInArray = true,
+		Callback = function(on)
+			self:SetBackgroundEnabled(on)
+		end,
+	})
+	backgrounds:Dropdown({
+		Name = "Background",
+		Options = BACKGROUND_NAMES,
+		Default = self.BackgroundStyle,
+		Callback = function(v)
+			self:SetBackground(v)
 		end,
 	})
 	return tab
