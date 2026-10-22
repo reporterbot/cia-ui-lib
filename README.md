@@ -2,11 +2,12 @@
 
 A dark, grey, Minecraft-client style UI library for Roblox, shipped as a **single LocalScript** (`main.lua`).
 
-**Build 5 · v1**
+**Build 6 · v1**
 
 - Three display modes you can switch between at any time: a **2D** window, a **3D** hub that floats in front of your character, and floating **Tabs** panels along the top of the screen
 - Modules with smooth expanding settings, toggles, sliders, dropdowns (single or multi-select), buttons, keybinds and labels
 - A built-in floating **island** at the top middle of the screen: your local time with a blinking colon, a show/hide button, a mode button beside it, and a live FPS / ping readout on the other side. The library builds it itself, so nothing has to exist in `StarterGui`
+- **Interactive Elements**: switching a toggle on plays an effect from the toggle, in the theme colour, that stays inside its tab (Ripple, 1's and 0's, or Glass Crack)
 - Notifications with a pulsing outline, a draining time bar and a close button
 - Array list of enabled modules
 - Automatic scaling and positioning for different screen sizes
@@ -81,12 +82,26 @@ local UI = Library.new({
     Stats = true,                       -- FPS / ping next to the island
     Island = nil,                       -- optional: your own island Frame
     IslandIcon = "rbxassetid://134387593103194", -- arrow on the island's show / hide button
+    InteractiveElements = true,         -- toggles play an effect when switched on
+    EffectAnimation = "Ripple",         -- "Ripple" | "1's and 0's" | "Glass Crack"
 
     -- Advanced
     Secure = false,                     -- true = parent to CoreGui instead of PlayerGui (see below)
 })
 UI:CreateSettingsTab()                  -- built-in Settings tab (mode, scale, 3D placement, theme)
 ```
+
+#### Interactive Elements
+
+Found in **Settings → Theme**. With **Interactive Elements** on (the default), switching a toggle on, or turning a module on with a click, plays an effect that starts at that toggle. **Effect Animation** picks which one:
+
+| Effect | What it does |
+| --- | --- |
+| `Ripple` (default) | Rings in the theme colour spread out from the toggle and fade away. |
+| `1's and 0's` | A burst of 1s and 0s is thrown out of the toggle, scrambling as they fly, then fading. |
+| `Glass Crack` | Procedurally generated cracks in the theme colour jump outward from the toggle in steps, with forks, then break up and fade in irregular beats like shattering glass. |
+
+Effects are drawn on a clipped layer covering just that tab's content area (the panel body in Tabs mode), so they can't escape it. Switching a toggle *off* plays nothing, and neither do changes made from code. Set the defaults with `InteractiveElements = false` and `EffectAnimation = "Glass Crack"` in `Library.new`, or play one yourself with `UI:PlayEffect(guiObject, tab)`.
 
 #### Advanced: `Secure`
 

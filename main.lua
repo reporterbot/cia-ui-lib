@@ -1,5 +1,5 @@
 --[[
-	CIALib v1  |  Build 5
+	CIALib v1  |  Build 6
 	Single-script build of the Minecraft-client style UI library.
 
 	Modes   : 2D (window), 3D (floating hub in front of your character), Tabs (floating panels along the top)
@@ -15,7 +15,7 @@
 		UI:Notify({ Title = "Hi", Content = "Hello", Type = "Success" })
 ]]
 
-local BUILD = 5
+local BUILD = 6
 local VERSION = "v1"
 
 -- only ever one hub per client (this script is re-cloned from StarterGui on respawn)
@@ -60,6 +60,7 @@ local PANEL_HEAD, PANEL_Y, PANEL_GAP, PANEL_MARGIN = 38, 64, 8, 12
 local TOP_SAFE = 60 -- keep the 2D window below the island row
 local ISLAND_ICON = "rbxassetid://134387593103194" -- arrow on the island's show / hide button
 local PANEL_ARROW = "rbxassetid://134161790366779" -- collapse arrow on each Tabs-mode panel
+local EFFECT_NAMES = { "Ripple", "1's and 0's", "Glass Crack" } -- Settings > Theme > Effect Animation
 local MODES = { ["2D"] = true, ["3D"] = true, Tabs = true }
 local MODE_ORDER = { "2D", "3D", "Tabs" }
 
@@ -270,6 +271,9 @@ function Library.new(config)
 	-- Advanced: Secure = true parents everything to CoreGui instead of PlayerGui (also accepted as Advanced.Secure)
 	self.Secure = config.Secure == true or (type(config.Advanced) == "table" and config.Advanced.Secure == true)
 	self.IslandIcon = config.IslandIcon or ISLAND_ICON
+	-- toggles play an effect from where they are switched on (Settings > Theme)
+	self.InteractiveElements = config.InteractiveElements ~= false
+	self.EffectStyle = config.EffectAnimation or "Ripple"
 	self.ToggleNotifications = true
 	self.Rainbow = false
 	self.Tabs = {}
@@ -534,6 +538,16 @@ function Library:_buildWindow()
 		BackgroundTransparency = 1,
 		ClipsDescendants = true,
 		Parent = win,
+	})
+
+	-- effect layer over the tab space; ClipsDescendants keeps every effect inside it
+	self._fx = new("Frame", {
+		Name = "FX",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		ClipsDescendants = true,
+		ZIndex = 50,
+		Parent = self.Content,
 	})
 
 	-- dragging (2D only)
@@ -952,6 +966,195 @@ end
 
 -- tabs ----------------------------------------------------------------------
 
+-- interactive effects ----------------------------------------------------------
+-- Played from a toggle when it is switched on (if Interactive Elements is enabled). Everything is parented to a
+-- clipped layer that covers the tab's content area, so no effect can leave the tab. Positions use the layer's
+-- scale (ox, oy in 0..1) and sizes are in design pixels, so they stay correct under UIScale.
+
+local EFFECTS = {}
+
+-- expanding rings in the theme colour that fade as they spread
+EFFECTS["Ripple"] = function(self, layer, ox, oy, size)
+	local color = self.Accent
+	local reach = math.max(size.X, size.Y) * 0.6
+	local function ring(delay, grow, thickness)
+		task.delay(delay, function()
+			if not layer.Parent then
+				return
+			end
+			local circle = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(ox, oy),
+				Size = UDim2.fromOffset(0, 0),
+				BackgroundColor3 = color,
+				BackgroundTransparency = 0.72,
+				Parent = layer,
+			})
+			new("UICorner", { CornerRadius = UDim.new(0.5, 0), Parent = circle })
+			local line = stroke(circle, color, thickness, 0.1)
+			local info = TweenInfo.new(0.85, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+			tween(circle, info, { Size = UDim2.fromOffset(reach * 2 * grow, reach * 2 * grow), BackgroundTransparency = 1 })
+			tween(line, info, { Transparency = 1 })
+			task.delay(0.9, function()
+				circle:Destroy()
+			end)
+		end)
+	end
+	ring(0, 1, 2)
+	ring(0.1, 0.7, 1.5)
+end
+
+-- a burst of 1s and 0s thrown out of the toggle, scrambling as they fly and fading at the end
+EFFECTS["1's and 0's"] = function(self, layer, ox, oy)
+	local rng = Random.new()
+	for _ = 1, 28 do
+		local ang = rng:NextNumber(0, math.pi * 2)
+		local dist = rng:NextNumber(40, 200)
+		local dx = math.cos(ang) * dist
+		local dy = math.sin(ang) * dist + rng:NextNumber(10, 40) -- they sag a little as they fly
+		local life = rng:NextNumber(0.6, 1.1)
+		local digit = new("TextLabel", {
+			Text = tostring(rng:NextInteger(0, 1)),
+			FontFace = FONT_BOLD,
+			TextSize = rng:NextInteger(13, 22),
+			TextColor3 = self.Accent,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(ox, oy),
+			Size = UDim2.fromOffset(12, 14),
+			Rotation = rng:NextInteger(-25, 25),
+			Parent = layer,
+		})
+		tween(digit, TweenInfo.new(life, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+			Position = UDim2.new(ox, dx, oy, dy),
+			Rotation = digit.Rotation + rng:NextInteger(-60, 60),
+		})
+		tween(digit, TweenInfo.new(life * 0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.In, 0, false, life * 0.45), {
+			TextTransparency = 1,
+		})
+		task.delay(life * 0.5, function()
+			if digit.Parent then
+				digit.Text = tostring(rng:NextInteger(0, 1))
+			end
+		end)
+		task.delay(life + 0.1, function()
+			digit:Destroy()
+		end)
+	end
+end
+
+-- procedurally generated cracks that jump outward from the toggle in discrete steps, then shatter away
+EFFECTS["Glass Crack"] = function(self, layer, ox, oy, size)
+	local rng = Random.new()
+	local reach = math.max(size.X, size.Y)
+	local byStep, maxStep, total = {}, 0, 0
+
+	local function add(x, y, ang, len, thickness, step)
+		local a = math.rad(ang)
+		local nx, ny = x + math.cos(a) * len, y + math.sin(a) * len
+		byStep[step] = byStep[step] or {}
+		table.insert(byStep[step], { x = (x + nx) / 2, y = (y + ny) / 2, len = len, ang = ang, th = thickness })
+		maxStep = math.max(maxStep, step)
+		total += 1
+		return nx, ny
+	end
+
+	-- one crack line: short straight segments that kink a little, occasionally forking
+	local function crack(x, y, ang, budget, step, depth)
+		local travelled = 0
+		while travelled < budget and total < 240 do
+			local len = rng:NextNumber(14, 38)
+			ang += rng:NextNumber(-26, 26)
+			x, y = add(x, y, ang, len, depth == 0 and 2 or 1.5, step)
+			travelled += len
+			step += 1
+			if depth < 2 and rng:NextNumber() < 0.2 then
+				local side = rng:NextNumber() < 0.5 and -1 or 1
+				crack(x, y, ang + side * rng:NextNumber(28, 62), (budget - travelled) * 0.55, step, depth + 1)
+			end
+		end
+	end
+
+	local arms = rng:NextInteger(7, 10)
+	local base = rng:NextNumber(0, 360)
+	for i = 1, arms do
+		crack(0, 0, base + (i - 1) * 360 / arms + rng:NextNumber(-14, 14), reach * rng:NextNumber(0.35, 0.7), 0, 0)
+	end
+
+	task.spawn(function()
+		local frames = {}
+		for step = 0, maxStep do
+			if not layer.Parent then
+				return
+			end
+			for _, s in ipairs(byStep[step] or {}) do
+				table.insert(frames, new("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.new(ox, s.x, oy, s.y),
+					Size = UDim2.fromOffset(s.len + 1, s.th),
+					Rotation = s.ang,
+					BackgroundColor3 = self.Accent,
+					BackgroundTransparency = rng:NextNumber(0, 0.2),
+					Parent = layer,
+				}))
+			end
+			task.wait(0.04) -- the step is the whole point: it jumps, it does not glide
+		end
+		task.wait(0.3)
+		-- breaking up: irregular beats, each one dims the cracks and drops a few more of them
+		for stage = 1, 6 do
+			for i = #frames, 1, -1 do
+				local f = frames[i]
+				if rng:NextNumber() < stage / 7 then
+					f:Destroy()
+					table.remove(frames, i)
+				else
+					f.BackgroundTransparency = math.min(0.2 + stage * 0.13, 1)
+				end
+			end
+			task.wait(rng:NextNumber(0.04, 0.12))
+		end
+		for _, f in ipairs(frames) do
+			f:Destroy()
+		end
+	end)
+end
+
+-- which layer an effect for this tab should play in: the window's tab space, or that tab's own panel in Tabs mode
+function Library:_fxLayer(tab)
+	if self.Mode == "Tabs" then
+		local p = tab and self._panels and self._panels[tab]
+		if p and p.Open then
+			return p.FX, p.Scale.Scale
+		end
+		return nil
+	end
+	return self._fx, self._uiScale.Scale
+end
+
+-- origin: a GuiObject (its centre is used) or an absolute screen position
+function Library:PlayEffect(origin, tab)
+	if not self.InteractiveElements or not self.Visible then
+		return
+	end
+	local layer, scale = self:_fxLayer(tab)
+	if not layer or layer.AbsoluteSize.X < 4 or layer.AbsoluteSize.Y < 4 then
+		return
+	end
+	if #layer:GetChildren() > 150 then
+		return -- plenty is already playing
+	end
+	local point = typeof(origin) == "Instance" and (origin.AbsolutePosition + origin.AbsoluteSize / 2) or origin
+	local rel = point - layer.AbsolutePosition
+	local ox = math.clamp(rel.X / layer.AbsoluteSize.X, 0, 1)
+	local oy = math.clamp(rel.Y / layer.AbsoluteSize.Y, 0, 1)
+	local size = layer.AbsoluteSize / math.max(scale, 0.05)
+	local play = EFFECTS[self.EffectStyle] or EFFECTS["Ripple"]
+	local ok, err = pcall(play, self, layer, ox, oy, size)
+	if not ok then
+		warn("[CIALib] effect error: " .. tostring(err))
+	end
+end
+
 -- floating tabs mode ---------------------------------------------------------
 -- every tab becomes its own panel; the panels sit side by side from the top left to the top right
 
@@ -1064,7 +1267,17 @@ function Library:_makePanel(tab)
 	local layout = list(holder, 6)
 
 	local panelScale = new("UIScale", { Parent = panel })
-	local data = { Panel = panel, Stroke = panelStroke, Scale = panelScale, Holder = holder, X = 0, Open = tab._panelOpen ~= false }
+	-- effect layer for this panel: below the header, clipped to the panel body
+	local fx = new("Frame", {
+		Name = "FX",
+		Position = UDim2.fromOffset(0, PANEL_HEAD + 2),
+		Size = UDim2.new(1, 0, 1, -(PANEL_HEAD + 2)),
+		BackgroundTransparency = 1,
+		ClipsDescendants = true,
+		ZIndex = 3,
+		Parent = panel,
+	})
+	local data = { Panel = panel, Stroke = panelStroke, Scale = panelScale, Holder = holder, FX = fx, X = 0, Open = tab._panelOpen ~= false }
 
 	-- alpha: 1 = dropped open, 0 = collapsed into the header
 	local alpha = data.Open and 1 or 0
@@ -1525,6 +1738,9 @@ function Tab:Module(opts)
 	header.MouseButton1Click:Connect(function()
 		if m.Toggleable then
 			m:Set(not m.Enabled)
+			if m.Enabled then
+				lib:PlayEffect(header.AbsolutePosition + Vector2.new(header.AbsoluteSize.X * 0.12, header.AbsoluteSize.Y / 2), self)
+			end
 		else
 			m:SetOpen(not m.Open)
 		end
@@ -1691,6 +1907,9 @@ function Module:Toggle(o)
 	end
 	hit.MouseButton1Click:Connect(function()
 		ctrl:Set(not state)
+		if state then
+			lib:PlayEffect(pill, self.Tab)
+		end
 	end)
 	return ctrl
 end
@@ -2848,6 +3067,21 @@ function Library:CreateSettingsTab()
 		Default = false,
 		Callback = function(v)
 			self.Rainbow = v
+		end,
+	})
+	theme:Toggle({
+		Name = "Interactive Elements",
+		Default = self.InteractiveElements,
+		Callback = function(v)
+			self.InteractiveElements = v
+		end,
+	})
+	theme:Dropdown({
+		Name = "Effect Animation",
+		Options = EFFECT_NAMES,
+		Default = self.EffectStyle,
+		Callback = function(v)
+			self.EffectStyle = v
 		end,
 	})
 	return tab
