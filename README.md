@@ -2,7 +2,7 @@
 
 A dark, grey, Minecraft-client style UI library for Roblox, shipped as a **single LocalScript** (`main.lua`).
 
-**Build 4 · v1**
+**Build 5 · v1**
 
 - Three display modes you can switch between at any time: a **2D** window, a **3D** hub that floats in front of your character, and floating **Tabs** panels along the top of the screen
 - Modules with smooth expanding settings, toggles, sliders, dropdowns (single or multi-select), buttons, keybinds and labels
@@ -29,7 +29,7 @@ If you'd rather use your own design, pass a frame in and the library will wire i
 Library.new({ Island = myFrame })   -- needs a TextLabel named "time" and an ImageButton inside it
 ```
 
-The arrow icon is `rbxassetid://134387593103194`; change it with `IslandIcon = "rbxassetid://..."`. The notification close button loads `rbxassetid://116396312853810`. Both assets must be available to your experience.
+The arrow icon is `rbxassetid://134387593103194`; change it with `IslandIcon = "rbxassetid://..."`. The notification close button loads `rbxassetid://116396312853810`, and the Tabs-mode collapse arrow loads `rbxassetid://134161790366779`. All three assets must be available to your experience.
 
 ## Display modes
 
@@ -37,7 +37,7 @@ The arrow icon is `rbxassetid://134387593103194`; change it with `IslandIcon = "
 | --- | --- |
 | `2D` | A draggable window. It scales down to fit small screens and always stays fully on screen, below the island row. |
 | `3D` | The whole hub on a non-colliding, unanchored part that eases after your **character** (not the camera) and stays in front of it. The front face flips if the camera ends up on the other side so it is never back-facing. Placement is set with `Distance`, `Height`, `Side` and `Size` in Settings. |
-| `Tabs` | One floating panel per tab, packed from the top left to the top right. The row scales down when there are too many tabs for the screen. |
+| `Tabs` | One floating panel per tab, packed from the top left to the top right. The row scales down when there are too many tabs for the screen. Each panel has a down arrow in its header: click it (or the header) and the panel's contents slide up and fade into the header; click again and it drops back down. |
 
 Switch with the **Mode** button beside the island (it cycles 2D → 3D → Tabs), the pill in the window's title bar, the Mode dropdown in Settings, or `UI:SetMode("3D")`.
 
@@ -105,6 +105,7 @@ Roblox only allows certain contexts to parent into CoreGui (plugins and some ele
 | `UI:Notify({ Title, Content, Type, Duration })` | `Type` is `Info` (default, uses the accent), `Success`, `Warning` or `Error`. Returns `{ Close = function }`. |
 | `UI:SetMode("2D" \| "3D" \| "Tabs")` | Switch display mode. |
 | `UI:SetVisible(bool)` / `UI:Toggle()` | Show or hide the hub. |
+| `UI:SetPanelOpen(tab, bool)` | Collapse or open a tab's panel in Tabs mode (`tab` is the Tab object or its name). The state is remembered when you switch modes. |
 | `UI:SetAccent(Color3)` | Change the accent colour. Presets are in `Library.ACCENTS`. |
 | `UI:SetScale(n)` | Extra 2D scale on top of the automatic fit (0.5 – 1.5). |
 | `UI:SetOffset3D(side, up, forward)` / `UI:SetScale3D(n)` | 3D hub placement relative to your character. |

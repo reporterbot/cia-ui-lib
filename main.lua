@@ -1,5 +1,5 @@
 --[[
-	CIALib v1  |  Build 4
+	CIALib v1  |  Build 5
 	Single-script build of the Minecraft-client style UI library.
 
 	Modes   : 2D (window), 3D (floating hub in front of your character), Tabs (floating panels along the top)
@@ -15,7 +15,7 @@
 		UI:Notify({ Title = "Hi", Content = "Hello", Type = "Success" })
 ]]
 
-local BUILD = 4
+local BUILD = 5
 local VERSION = "v1"
 
 -- only ever one hub per client (this script is re-cloned from StarterGui on respawn)
@@ -59,6 +59,7 @@ local PPS = 70 -- canvas pixels per stud when the 3D hub is at scale 1
 local PANEL_HEAD, PANEL_Y, PANEL_GAP, PANEL_MARGIN = 38, 64, 8, 12
 local TOP_SAFE = 60 -- keep the 2D window below the island row
 local ISLAND_ICON = "rbxassetid://134387593103194" -- arrow on the island's show / hide button
+local PANEL_ARROW = "rbxassetid://134161790366779" -- collapse arrow on each Tabs-mode panel
 local MODES = { ["2D"] = true, ["3D"] = true, Tabs = true }
 local MODE_ORDER = { "2D", "3D", "Tabs" }
 
@@ -990,27 +991,57 @@ function Library:_makePanel(tab)
 	corner(panel, 8)
 	local panelStroke = stroke(panel, THEME.Stroke, 2, 1)
 
+	-- header = the "tab button". Its arrow collapses the panel into it and drops it back down.
+	local header = new("Frame", {
+		Name = "Header",
+		Size = UDim2.new(1, 0, 0, PANEL_HEAD + 2),
+		BackgroundColor3 = THEME.Panel,
+		ZIndex = 5, -- above the body, so the body slides *under* it when it collapses
+		Parent = panel,
+	})
+	local hit = new("TextButton", { Name = "Toggle", Size = UDim2.fromScale(1, 1), ZIndex = 6, Parent = header })
 	local title = new("TextLabel", {
 		Text = tab.Name,
 		FontFace = FONT_BOLD,
 		TextSize = 15,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		Size = UDim2.new(1, 0, 0, PANEL_HEAD),
-		Parent = panel,
+		Size = UDim2.new(1, -44, 0, PANEL_HEAD),
+		ZIndex = 7,
+		Parent = header,
 	})
 	padding(title, 14, 0, 0, 0)
 	local line = new("Frame", {
 		Position = UDim2.fromOffset(0, PANEL_HEAD),
 		Size = UDim2.new(1, 0, 0, 2),
-		Parent = panel,
+		ZIndex = 7,
+		Parent = header,
 	})
 	self:_bindAccent(function(c)
 		line.BackgroundColor3 = c
 	end)
+	local arrow = new("ImageButton", {
+		Name = "Arrow",
+		Image = PANEL_ARROW,
+		ImageColor3 = THEME.TextDim,
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -10, 0, PANEL_HEAD / 2),
+		Size = UDim2.fromOffset(18, 18),
+		ZIndex = 8,
+		Parent = header,
+	})
 
-	local scroller = new("ScrollingFrame", {
+	-- body: a CanvasGroup so it can fade while it slides into the header
+	local body = new("CanvasGroup", {
+		Name = "Body",
 		Position = UDim2.fromOffset(0, PANEL_HEAD + 2),
 		Size = UDim2.new(1, 0, 0, 0),
+		BackgroundTransparency = 1,
+		ZIndex = 1,
+		Parent = panel,
+	})
+	local scroller = new("ScrollingFrame", {
+		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
 		ScrollBarThickness = 2,
 		ScrollBarImageTransparency = 0.3,
@@ -1018,7 +1049,7 @@ function Library:_makePanel(tab)
 		AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		ScrollingDirection = Enum.ScrollingDirection.Y,
 		ElasticBehavior = Enum.ElasticBehavior.Never,
-		Parent = panel,
+		Parent = body,
 	})
 	self:_bindAccent(function(c)
 		scroller.ScrollBarImageColor3 = c
@@ -1033,15 +1064,60 @@ function Library:_makePanel(tab)
 	local layout = list(holder, 6)
 
 	local panelScale = new("UIScale", { Parent = panel })
-	local data = { Panel = panel, Stroke = panelStroke, Scale = panelScale, Holder = holder, X = 0 }
+	local data = { Panel = panel, Stroke = panelStroke, Scale = panelScale, Holder = holder, X = 0, Open = tab._panelOpen ~= false }
+
+	-- alpha: 1 = dropped open, 0 = collapsed into the header
+	local alpha = data.Open and 1 or 0
+	local bodyH = 0
+	local function apply()
+		local shown = math.floor(bodyH * alpha + 0.5)
+		panel.Size = UDim2.new(0, panel.Size.X.Offset, 0, PANEL_HEAD + 2 + shown)
+		body.Size = UDim2.new(1, 0, 0, bodyH)
+		-- as it closes the contents ride up under the header and fade out; opening reverses it
+		body.Position = UDim2.fromOffset(0, PANEL_HEAD + 2 - math.floor((1 - alpha) * math.min(bodyH, 120) * 0.5))
+		body.GroupTransparency = 1 - math.clamp(alpha * 1.6, 0, 1)
+	end
+	local anim = animator(alpha, function(v)
+		alpha = v
+		apply()
+	end)
+	arrow.Rotation = data.Open and 0 or 180
+
 	function data.Fit()
 		local content = layout.AbsoluteContentSize.Y + 14
 		local maxH = math.max((self.Gui.AbsoluteSize.Y - PANEL_Y - 24) / panelScale.Scale - PANEL_HEAD - 2, 120)
-		local h = math.min(content, maxH)
-		scroller.Size = UDim2.new(1, 0, 0, h)
-		panel.Size = UDim2.new(0, panel.Size.X.Offset, 0, PANEL_HEAD + 2 + h)
+		bodyH = math.min(content, maxH)
+		apply()
 	end
 	layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(data.Fit)
+
+	function data.SetOpen(open, instant)
+		open = open and true or false
+		data.Open = open
+		tab._panelOpen = open
+		if instant then
+			anim.Set(open and 1 or 0)
+			arrow.Rotation = open and 0 or 180
+		else
+			anim.To(open and 1 or 0, INFO_SMOOTH)
+			tween(arrow, INFO_SMOOTH, { Rotation = open and 0 or 180 })
+		end
+		data.Fit()
+	end
+
+	local function flip()
+		data.SetOpen(not data.Open)
+	end
+	hit.MouseButton1Click:Connect(flip)
+	arrow.MouseButton1Click:Connect(flip)
+	hit.MouseEnter:Connect(function()
+		tween(header, INFO_FAST, { BackgroundColor3 = THEME.Panel:Lerp(Color3.new(1, 1, 1), 0.05) })
+		tween(arrow, INFO_FAST, { ImageColor3 = THEME.Text })
+	end)
+	hit.MouseLeave:Connect(function()
+		tween(header, INFO_FAST, { BackgroundColor3 = THEME.Panel })
+		tween(arrow, INFO_FAST, { ImageColor3 = THEME.TextDim })
+	end)
 	return data
 end
 
@@ -1065,6 +1141,27 @@ function Library:_layoutPanels(instant)
 				p.Panel.Position = UDim2.fromOffset(p.X, PANEL_Y)
 			end
 		end
+	end
+end
+
+-- collapse / open a tab's panel in Tabs mode (tab can be the Tab object or its name)
+function Library:SetPanelOpen(tab, open)
+	if type(tab) == "string" then
+		for _, t in ipairs(self.Tabs) do
+			if t.Name == tab then
+				tab = t
+				break
+			end
+		end
+	end
+	if type(tab) ~= "table" then
+		return
+	end
+	local p = self._panels and self._panels[tab]
+	if p then
+		p.SetOpen(open)
+	else
+		tab._panelOpen = open and true or false
 	end
 end
 
