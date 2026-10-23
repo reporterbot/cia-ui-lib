@@ -1,5 +1,5 @@
 --[[
-	CIALib v1  |  Build 10
+	CIALib v1  |  Build 11
 	Single-script build of the Minecraft-client style UI library.
 
 	Modes   : 2D (window), 3D (floating hub in front of your character), Tabs (floating panels along the top)
@@ -15,7 +15,7 @@
 		UI:Notify({ Title = "Hi", Content = "Hello", Type = "Success" })
 ]]
 
-local BUILD = 10
+local BUILD = 11
 local VERSION = "v1"
 
 -- only ever one hub per client (this script is re-cloned from StarterGui on respawn)
@@ -324,11 +324,64 @@ function Library:_bindAccent(fn)
 	fn(self.Accent)
 end
 
-function Library:SetAccent(color)
+-- changes the colour everywhere, with no bookkeeping (Rainbow uses this every frame)
+function Library:_applyAccent(color)
 	self.Accent = color
 	for _, fn in ipairs(self._accentFns) do
 		fn(color)
 	end
+end
+
+-- the theme colour. While Rainbow is running the new colour is remembered instead: it is what the theme returns to
+-- when Rainbow is switched off.
+function Library:SetAccent(color)
+	self._accentToken = (self._accentToken or 0) + 1 -- cancels a fade back that is still in progress
+	self._fadeTarget = nil
+	if self.Rainbow then
+		self._preRainbow = color
+		return
+	end
+	self:_applyAccent(color)
+end
+
+-- Rainbow on remembers the current colour; Rainbow off fades back to it. keepColor skips the fade back
+-- (used when a new accent has just been picked).
+function Library:SetRainbow(on, keepColor)
+	on = on and true or false
+	if on == (self.Rainbow == true) then
+		return
+	end
+	self._accentToken = (self._accentToken or 0) + 1
+	local token = self._accentToken
+	if on then
+		-- if it is switched back on while still fading to the original colour, the original is what to remember
+		self._preRainbow = self._fadeTarget or self.Accent
+		self._fadeTarget = nil
+		self.Rainbow = true
+		return
+	end
+	self.Rainbow = false
+	local back = self._preRainbow
+	self._preRainbow = nil
+	self._fadeTarget = nil
+	if keepColor or not back then
+		return
+	end
+	self._fadeTarget = back
+	local from = self.Accent
+	task.spawn(function()
+		local t0 = os.clock()
+		while self._accentToken == token and not self.Rainbow do
+			local a = math.clamp((os.clock() - t0) / 0.4, 0, 1)
+			if a >= 1 then
+				self._fadeTarget = nil
+				self:_applyAccent(back) -- land on the exact original colour
+				return
+			end
+			self:_applyAccent(from:Lerp(back, 1 - (1 - a) ^ 3))
+			task.wait()
+		end
+	end)
 end
 
 function Library:_buildGui()
@@ -709,7 +762,7 @@ function Library:_buildWindow()
 	self:_connect(RunService.Heartbeat, function(dt)
 		lineGradient.Offset = Vector2.new(math.sin(os.clock() * 0.9) * 0.45, 0)
 		if self.Rainbow then
-			self:SetAccent(Color3.fromHSV((os.clock() * 0.08) % 1, 0.62, 1))
+			self:_applyAccent(Color3.fromHSV((os.clock() * 0.08) % 1, 0.62, 1))
 		end
 		acc += dt
 		frames += 1
@@ -4327,7 +4380,7 @@ function Library:CreateSettingsTab()
 		Options = ACCENT_NAMES,
 		Default = "Silver",
 		Callback = function(v)
-			self.Rainbow = false
+			self:SetRainbow(false, true) -- picking a colour ends Rainbow and keeps the pick
 			if self._rainbowToggle then
 				self._rainbowToggle:Set(false, true)
 			end
@@ -4338,7 +4391,7 @@ function Library:CreateSettingsTab()
 		Name = "Rainbow",
 		Default = false,
 		Callback = function(v)
-			self.Rainbow = v
+			self:SetRainbow(v)
 		end,
 	})
 

@@ -2,7 +2,7 @@
 
 A dark, grey, Minecraft-client style UI library for Roblox, shipped as a **single LocalScript** (`main.lua`).
 
-**Build 10 · v1**
+**Build 11 · v1**
 
 - Three display modes you can switch between at any time: a **2D** window, a **3D** hub that floats in front of your character, and floating **Tabs** panels along the top of the screen
 - Modules with smooth expanding settings, toggles, sliders, dropdowns (single or multi-select), **colour pickers** (single colour or two-colour gradient, as an inline circle or a bar that opens it), buttons, keybinds and labels
@@ -197,7 +197,8 @@ Roblox only allows certain contexts to parent into CoreGui (plugins and some ele
 | `UI:SetElementTransparencyOverride(bool)` / `UI:SetElementTransparency(n)` | Use your own element transparency (0 to 0.9) instead of the automatic 0.5 over a background. |
 | `UI:PlayEffect(origin, tab)` | Play the current Interactive Elements effect from a GuiObject or a screen position inside `tab`'s space. |
 | `UI:SetPanelOpen(tab, bool)` | Collapse or open a tab's panel in Tabs mode (`tab` is the Tab object or its name). The state is remembered when you switch modes. |
-| `UI:SetAccent(Color3)` | Change the accent colour. Presets are in `Library.ACCENTS`. |
+| `UI:SetAccent(Color3)` | Change the accent colour. Presets are in `Library.ACCENTS`. While Rainbow is running, the colour you pass is remembered instead and is what the theme returns to when Rainbow stops. |
+| `UI:SetRainbow(bool)` | Turn the Rainbow theme on or off (the Rainbow switch in Settings → Theme). Turning it **off** fades smoothly back to the colour the theme had before Rainbow started. Picking an accent from the dropdown while it runs ends Rainbow and keeps your pick. |
 | `UI:SetScale(n)` | Extra 2D scale on top of the automatic fit (0.5 – 1.5). |
 | `UI:SetOffset3D(side, up, forward)` / `UI:SetScale3D(n)` | 3D hub placement relative to your character. |
 | `UI:SetArrayList(bool)` / `UI:SetStatsVisible(bool)` | Toggle the array list / the island stats. |
