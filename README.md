@@ -2,10 +2,10 @@
 
 A dark, grey, Minecraft-client style UI library for Roblox, shipped as a **single LocalScript** (`main.lua`).
 
-**Build 9 · v1**
+**Build 10 · v1**
 
 - Three display modes you can switch between at any time: a **2D** window, a **3D** hub that floats in front of your character, and floating **Tabs** panels along the top of the screen
-- Modules with smooth expanding settings, toggles, sliders, dropdowns (single or multi-select), buttons, keybinds and labels
+- Modules with smooth expanding settings, toggles, sliders, dropdowns (single or multi-select), **colour pickers** (single colour or two-colour gradient, as an inline circle or a bar that opens it), buttons, keybinds and labels
 - A built-in floating **island** at the top middle of the screen: your local time with a blinking colon, a show/hide button, a mode button beside it, and a live FPS / ping readout on the other side. The library builds it itself, so nothing has to exist in `StarterGui`
 - **Interactive Elements**: flipping a toggle on or off plays an effect from exactly where you clicked, in the theme colour, that stays inside its tab (Ripple, 1's and 0's, or Glass Crack). It has its own **When On** / **When Off** switches
 - **Custom Backgrounds**: animated backdrops in the theme colour for every tab in 2D, 3D and Tabs mode: Waves, Stormy Night (rain, splashes, lightning) and Cherry Blossom
@@ -123,6 +123,35 @@ Clicking a toggle (or clicking a module on or off) plays the effect **from the e
 
 Effects are drawn on a clipped layer covering just that tab's content area (the panel body in Tabs mode), so they can't escape it. Changes made from code don't play them. Set the defaults with `InteractiveElements`, `EffectAnimation`, `EffectWhenOn` and `EffectWhenOff` in `Library.new`, or play one yourself with `UI:PlayEffect(origin, tab)`.
 
+#### Color picker
+
+`Module:ColorPicker` is a circle colour picker: the angle is the hue, the distance from the centre is the saturation, and a bar underneath sets the brightness. Two options choose how it works and how it looks:
+
+| Option | Values | What it does |
+| --- | --- | --- |
+| `Mode` | `"Normal"` (default), `"Gradient"` | `Normal` picks one colour. `Gradient` picks two (a **Start** and an **End** button choose which one the circle edits) and the bar previews the gradient. |
+| `Style` | `"Normal"` (default), `"Bar"` | `Normal` shows the circle picker directly. `Bar` shows just a bar (a swatch, or the gradient) and clicking it drops the circle picker open. |
+
+```lua
+local color = Mod:ColorPicker({
+    Name = "Theme color",
+    Mode = "Normal",                      -- or "Gradient"
+    Style = "Bar",                        -- or "Normal"
+    Default = Color3.fromRGB(255, 96, 150),
+    Callback = function(c) print(c) end,  -- Normal: (color)
+})
+
+local fade = Mod:ColorPicker({
+    Name = "Fade",
+    Mode = "Gradient",
+    Default = { Color3.fromRGB(64, 224, 160), Color3.fromRGB(156, 108, 255) },
+    Callback = function(from, to) end,    -- Gradient: (startColor, endColor)
+})
+frame.UIGradient.Color = fade:GetSequence()   -- ready-made ColorSequence
+```
+
+The callback runs continuously while you drag. The control has `:Get()` (a colour, or the start and end colours in Gradient mode), `:Set(color)`, `:SetGradient(start, end)`, `:GetSequence()`, `:SetMode("Gradient")`, `:SetStyle("Bar")` and, for the Bar style, `:Open(true)`.
+
 #### Custom Backgrounds
 
 Another toggle in **Settings**, with a **Background** dropdown. It puts an animated backdrop behind every tab: the window in 2D and 3D, and each panel in Tabs mode. It is off by default.
@@ -189,6 +218,7 @@ Roblox only allows certain contexts to parent into CoreGui (plugins and some ele
 | `Module:Toggle({ Name, Default, Callback })` | Switch. Returns a control with `:Set(v)` / `:Get()`. |
 | `Module:Slider({ Name, Min, Max, Default, Increment, Suffix, Callback })` | Slider with `:Set(v)` / `:Get()`. |
 | `Module:Dropdown({ Name, Options, Default, Multi, Callback })` | Dropdown with `:Set(v)`, `:Get()`, `:SetOptions(list)`. Multi-select takes and returns a list. |
+| `Module:ColorPicker({ Name, Mode, Style, Default, Callback })` | Circle colour picker. `Mode` is `"Normal"` or `"Gradient"`, `Style` is `"Normal"` or `"Bar"`. See [Color picker](#color-picker). |
 | `Module:Button({ Name, Callback })` | Button. |
 | `Module:Keybind({ Name, Default, Toggles, OnPress, Callback })` | Click, then press a key to bind (Backspace clears, Escape cancels). `Toggles = true` makes the key flip the module. |
 | `Module:Label(text)` | Text with `:SetText(s)`. |

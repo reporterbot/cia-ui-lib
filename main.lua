@@ -1,9 +1,9 @@
 --[[
-	CIALib v1  |  Build 9
+	CIALib v1  |  Build 10
 	Single-script build of the Minecraft-client style UI library.
 
 	Modes   : 2D (window), 3D (floating hub in front of your character), Tabs (floating panels along the top)
-	Controls: Toggle, Slider, Dropdown (single / multi), Button, Keybind, Label
+	Controls: Toggle, Slider, Dropdown (single / multi), ColorPicker (normal / gradient, circle / bar), Button, Keybind, Label
 	Extras  : built-in floating island (clock, show/hide button), mode button, FPS / ping readout, notifications, array list
 	Advanced: Library.new({ Secure = true }) parents everything to CoreGui instead of PlayerGui (where the context allows it)
 
@@ -15,7 +15,7 @@
 		UI:Notify({ Title = "Hi", Content = "Hello", Type = "Success" })
 ]]
 
-local BUILD = 9
+local BUILD = 10
 local VERSION = "v1"
 
 -- only ever one hub per client (this script is re-cloned from StarterGui on respawn)
@@ -857,7 +857,11 @@ end
 function Library:GetPointer()
 	local loc = UserInputService:GetMouseLocation()
 	if self.Mode ~= "3D" then
-		return loc
+		-- the ScreenGui's own origin is offset by the top-bar inset, so shift the raw mouse position into GUI space
+		local ok, origin = pcall(function()
+			return self.Gui.AbsolutePosition
+		end)
+		return loc + (ok and origin or Vector2.zero)
 	end
 	local part = self._part
 	local cam = Workspace.CurrentCamera
@@ -3153,6 +3157,361 @@ function Module:Dropdown(o)
 	head.MouseButton1Click:Connect(function()
 		ctrl:SetOpen(not open)
 	end)
+	return ctrl
+end
+
+-- Color picker. Two modes (o.Mode):  "Normal" = one colour (default), "Gradient" = two colours (start and end).
+-- Two styles (o.Style):  "Normal" = the circle picker is always shown, "Bar" = just a bar showing the colour / gradient,
+-- click it to drop the circle picker open.
+-- Callback: Normal -> (color), Gradient -> (startColor, endColor).  ctrl:Get() returns the same values.
+function Module:ColorPicker(o)
+	local lib = self.Library
+	local WHEEL, SPOKES = 104, 96
+	local R = WHEEL / 2
+	local mode = o.Mode == "Gradient" and "Gradient" or "Normal"
+	local style = o.Style == "Bar" and "Bar" or "Normal"
+
+	-- stops are kept as HSV so hue and saturation survive when brightness or saturation hits zero
+	local function toHSV(c)
+		local h, s, v = c:ToHSV()
+		return { h, s, v }
+	end
+	local stops
+	local d = o.Default
+	if type(d) == "table" then
+		stops = { toHSV(d[1] or lib.Accent), toHSV(d[2] or d[1] or lib.Accent) }
+	else
+		local h, s, v = (typeof(d) == "Color3" and d or lib.Accent):ToHSV()
+		stops = { { h, s, v }, { (h + 0.15) % 1, s, v } }
+	end
+	local active = 1 -- which stop the wheel is editing
+	local function color(i)
+		local s = stops[i]
+		return Color3.fromHSV(s[1], s[2], s[3])
+	end
+
+	-- header: name on the left, a swatch / gradient bar on the right (the whole thing when the style is Bar)
+	local root = row(self, 30, true)
+	local head = new("TextButton", { Name = "Header", Size = UDim2.new(1, 0, 0, 30), Parent = root })
+	local label = rowLabel(head, o.Name or "Color", -20)
+	local bar = new("Frame", {
+		Name = "Bar",
+		AnchorPoint = Vector2.new(1, 0.5),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Parent = head,
+	})
+	corner(bar, 7)
+	stroke(bar, THEME.Stroke, 1)
+	local barGradient = new("UIGradient", { Parent = bar })
+	local chevron = new("TextLabel", {
+		Text = "›",
+		FontFace = FONT_BOLD,
+		TextSize = 18,
+		TextColor3 = THEME.SubText,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -8, 0, 0),
+		Size = UDim2.fromOffset(16, 28),
+		Parent = head,
+	})
+
+	local body = new("Frame", {
+		Position = UDim2.fromOffset(0, 30),
+		Size = UDim2.new(1, 0, 0, 0),
+		BackgroundTransparency = 1,
+		Parent = root,
+	})
+	padding(body, 6, 2, 6, 8)
+	local layout = list(body, 6)
+	local region = collapsible(root, 30, body, layout, 10, style == "Normal")
+	local open = style == "Normal"
+	chevron.Rotation = open and 90 or 0
+
+	local refresh -- defined below; the Start / End buttons call it
+
+	-- Gradient mode: choose which of the two colours the wheel edits
+	local stopRow = new("Frame", {
+		Name = "Stops",
+		Size = UDim2.new(1, 0, 0, 24),
+		BackgroundTransparency = 1,
+		LayoutOrder = 1,
+		Parent = body,
+	})
+	local stopBtns = {}
+	for i, name in ipairs({ "Start", "End" }) do
+		local b = new("TextButton", {
+			Name = name,
+			Position = UDim2.new(i == 1 and 0 or 0.5, i == 1 and 0 or 3, 0, 0),
+			Size = UDim2.new(0.5, -3, 1, 0),
+			BackgroundTransparency = 0,
+			BackgroundColor3 = THEME.Background,
+			Parent = stopRow,
+		})
+		corner(b, 6)
+		local outline = stroke(b, THEME.Stroke, 1)
+		local dot = new("Frame", {
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.new(0, 8, 0.5, 0),
+			Size = UDim2.fromOffset(14, 14),
+			Parent = b,
+		})
+		corner(dot, 7)
+		new("TextLabel", {
+			Text = name,
+			TextSize = 12,
+			TextColor3 = THEME.TextDim,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Position = UDim2.fromOffset(28, 0),
+			Size = UDim2.new(1, -32, 1, 0),
+			Parent = b,
+		})
+		stopBtns[i] = { outline = outline, dot = dot }
+		b.MouseButton1Click:Connect(function()
+			active = i
+			refresh()
+		end)
+	end
+
+	-- the circle: hue is the angle, saturation the distance from the centre (a ring of thin spokes, each fading white
+	-- to a pure hue, clipped to a circle); brightness is a darkening layer over it, controlled by the bar below
+	local holder = new("Frame", {
+		Name = "Wheel",
+		Size = UDim2.new(1, 0, 0, WHEEL + 4),
+		BackgroundTransparency = 1,
+		LayoutOrder = 2,
+		Parent = body,
+	})
+	local wheel = new("CanvasGroup", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(WHEEL, WHEEL),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Parent = holder,
+	})
+	corner(wheel, R)
+	stroke(wheel, THEME.Stroke, 1)
+	local L = R + 3
+	for k = 0, SPOKES - 1 do
+		local ang = k / SPOKES * math.pi * 2
+		local hue = Color3.fromHSV(k / SPOKES, 1, 1)
+		local spoke = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, math.cos(ang) * L / 2, 0.5, math.sin(ang) * L / 2),
+			Size = UDim2.fromOffset(L, 4),
+			Rotation = math.deg(ang),
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			Parent = wheel,
+		})
+		new("UIGradient", {
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+				ColorSequenceKeypoint.new(R / L, hue),
+				ColorSequenceKeypoint.new(1, hue),
+			}),
+			Parent = spoke,
+		})
+	end
+	local shade = new("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = Color3.new(0, 0, 0),
+		BackgroundTransparency = 1,
+		ZIndex = 2,
+		Parent = wheel,
+	})
+	local knob = new("Frame", {
+		Name = "Knob",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Size = UDim2.fromOffset(12, 12),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		ZIndex = 3,
+		Parent = holder,
+	})
+	corner(knob, 6)
+	stroke(knob, Color3.new(1, 1, 1), 2)
+	local wheelHit = new("TextButton", {
+		Name = "WheelHit",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(WHEEL, WHEEL),
+		ZIndex = 5,
+		Parent = holder,
+	})
+
+	local vbar = new("Frame", {
+		Name = "Brightness",
+		Size = UDim2.new(1, 0, 0, 12),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		LayoutOrder = 3,
+		Parent = body,
+	})
+	corner(vbar, 6)
+	stroke(vbar, THEME.Stroke, 1)
+	local vGradient = new("UIGradient", { Parent = vbar })
+	local vKnob = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Size = UDim2.fromOffset(6, 16),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Parent = vbar,
+	})
+	corner(vKnob, 3)
+	stroke(vKnob, Color3.new(0, 0, 0), 1)
+	local vHit = new("TextButton", { Name = "BrightnessHit", Size = UDim2.fromScale(1, 1), ZIndex = 3, Parent = vbar })
+
+	local hex = new("TextLabel", {
+		Text = "",
+		TextSize = 11,
+		TextColor3 = THEME.SubText,
+		Size = UDim2.new(1, 0, 0, 14),
+		LayoutOrder = 4,
+		Parent = body,
+	})
+
+	local ctrl = {}
+
+	refresh = function()
+		local s = stops[active]
+		local c = color(active)
+		barGradient.Color = mode == "Gradient" and ColorSequence.new(color(1), color(2)) or ColorSequence.new(color(1))
+		shade.BackgroundTransparency = s[3] -- brightness 1 = overlay invisible, 0 = solid black
+		local ang = s[1] * math.pi * 2
+		knob.Position = UDim2.new(0.5, math.cos(ang) * s[2] * R, 0.5, math.sin(ang) * s[2] * R)
+		knob.BackgroundColor3 = c
+		vGradient.Color = ColorSequence.new(Color3.new(0, 0, 0), Color3.fromHSV(s[1], s[2], 1))
+		vKnob.Position = UDim2.new(s[3], 0, 0.5, 0)
+		hex.Text = string.format("%s  #%s", mode == "Gradient" and (active == 1 and "Start" or "End") or "Color", c:ToHex())
+		for i = 1, 2 do
+			stopBtns[i].dot.BackgroundColor3 = color(i)
+			stopBtns[i].outline.Color = (mode == "Gradient" and i == active) and lib.Accent or THEME.Stroke
+		end
+	end
+	lib:_bindAccent(function(c)
+		for i = 1, 2 do
+			stopBtns[i].outline.Color = (mode == "Gradient" and i == active) and c or THEME.Stroke
+		end
+	end)
+
+	local function commit(silent)
+		refresh()
+		if silent then
+			return
+		end
+		if mode == "Gradient" then
+			safe(o.Callback, color(1), color(2))
+		else
+			safe(o.Callback, color(1))
+		end
+	end
+
+	local function applyLayout()
+		stopRow.Visible = mode == "Gradient"
+		chevron.Visible = style == "Bar"
+		local barW = mode == "Gradient" and 84 or 40
+		bar.Size = UDim2.fromOffset(barW, 14)
+		bar.Position = UDim2.new(1, style == "Bar" and -28 or -10, 0.5, 0)
+		label.Size = UDim2.new(1, -(barW + (style == "Bar" and 36 or 20) + 8), 0, 30)
+	end
+
+	local function setOpen(v, instant)
+		open = v
+		region.Set(v, instant)
+		tween(chevron, INFO_SMOOTH, { Rotation = v and 90 or 0 })
+	end
+
+	-- dragging on the wheel or the brightness bar (uses the same pointer mapping as sliders, so it works in 2D, 3D and Tabs)
+	local function follow(kind)
+		local p = lib:GetPointer()
+		if not p then
+			return
+		end
+		local s = stops[active]
+		if kind == "wheel" then
+			local v = p - (wheel.AbsolutePosition + wheel.AbsoluteSize / 2)
+			if v.Magnitude > 1e-3 then
+				s[1] = (math.atan2(v.Y, v.X) / (math.pi * 2)) % 1
+			end
+			s[2] = math.clamp(v.Magnitude / (wheel.AbsoluteSize.X / 2), 0, 1)
+		else
+			s[3] = math.clamp((p.X - vbar.AbsolutePosition.X) / math.max(vbar.AbsoluteSize.X, 1), 0, 1)
+		end
+		commit()
+	end
+	local dragConn, dragKind
+	local function stopDrag()
+		if dragConn then
+			dragConn:Disconnect()
+			dragConn = nil
+		end
+		dragKind = nil
+	end
+	local function startDrag(kind)
+		dragKind = kind
+		follow(kind)
+		if dragConn then
+			dragConn:Disconnect()
+		end
+		dragConn = RunService.RenderStepped:Connect(function()
+			follow(dragKind)
+		end)
+	end
+	local function pressed(kind)
+		return function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				startDrag(kind)
+			end
+		end
+	end
+	wheelHit.InputBegan:Connect(pressed("wheel"))
+	vHit.InputBegan:Connect(pressed("value"))
+	lib:_connect(UserInputService.InputEnded, function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			stopDrag()
+		end
+	end)
+
+	hoverable(head, root, THEME.Element, THEME.ElementHover)
+	head.MouseButton1Click:Connect(function()
+		if style == "Bar" then
+			setOpen(not open)
+		end
+	end)
+
+	-- public API ----------------------------------------------------------------------------
+	function ctrl:Get()
+		if mode == "Gradient" then
+			return color(1), color(2)
+		end
+		return color(1)
+	end
+	function ctrl:GetSequence()
+		return mode == "Gradient" and ColorSequence.new(color(1), color(2)) or ColorSequence.new(color(1))
+	end
+	function ctrl:Set(c, silent) -- Normal: the colour. Gradient: the colour of the stop being edited
+		stops[active] = toHSV(c)
+		commit(silent)
+	end
+	function ctrl:SetGradient(a, b, silent)
+		stops[1], stops[2] = toHSV(a), toHSV(b)
+		commit(silent)
+	end
+	function ctrl:SetMode(m)
+		mode = m == "Gradient" and "Gradient" or "Normal"
+		active = 1
+		applyLayout()
+		refresh()
+	end
+	function ctrl:SetStyle(s)
+		style = s == "Bar" and "Bar" or "Normal"
+		applyLayout()
+		setOpen(style == "Normal")
+	end
+	function ctrl:Open(v) -- Bar style: drop the picker open or closed from code
+		if style == "Bar" then
+			setOpen(v and true or false)
+		end
+	end
+	ctrl.Instance = root
+
+	applyLayout()
+	refresh()
 	return ctrl
 end
 
