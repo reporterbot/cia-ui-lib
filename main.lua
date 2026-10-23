@@ -1,5 +1,5 @@
 --[[
-	CIALib v1  |  Build 8
+	CIALib v1  |  Build 9
 	Single-script build of the Minecraft-client style UI library.
 
 	Modes   : 2D (window), 3D (floating hub in front of your character), Tabs (floating panels along the top)
@@ -15,7 +15,7 @@
 		UI:Notify({ Title = "Hi", Content = "Hello", Type = "Success" })
 ]]
 
-local BUILD = 8
+local BUILD = 9
 local VERSION = "v1"
 
 -- only ever one hub per client (this script is re-cloned from StarterGui on respawn)
@@ -504,7 +504,7 @@ function Library:_buildWindow()
 	})
 	local tabList = new("Frame", {
 		Name = "Tabs",
-		Size = UDim2.new(1, 0, 1, -48),
+		Size = UDim2.new(1, 0, 1, -56),
 		BackgroundTransparency = 1,
 		Parent = side,
 	})
@@ -512,10 +512,12 @@ function Library:_buildWindow()
 	list(tabList, 6)
 	self.TabList = tabList
 
+	-- footer: round profile picture, name, fps and ping. In 2D / 3D this is also the way into Settings (the Settings
+	-- tab is not listed in the sidebar), so it lights up while Settings is open.
 	local footer = new("Frame", {
 		AnchorPoint = Vector2.new(0, 1),
 		Position = UDim2.fromScale(0, 1),
-		Size = UDim2.new(1, 0, 0, 48),
+		Size = UDim2.new(1, 0, 0, 56),
 		BackgroundTransparency = 1,
 		Parent = side,
 	})
@@ -525,24 +527,87 @@ function Library:_buildWindow()
 		BackgroundColor3 = THEME.Stroke,
 		Parent = footer,
 	})
-	new("TextLabel", {
-		Text = LocalPlayer.DisplayName,
-		TextSize = 12,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		TextTruncate = Enum.TextTruncate.AtEnd,
-		Position = UDim2.fromOffset(14, 8),
-		Size = UDim2.new(1, -28, 0, 16),
+	local card = new("Frame", {
+		Name = "Profile",
+		Position = UDim2.fromOffset(8, 7),
+		Size = UDim2.new(1, -16, 1, -12),
+		BackgroundColor3 = THEME.Element,
+		BackgroundTransparency = 1,
 		Parent = footer,
 	})
-	local fps = new("TextLabel", {
-		Text = "-- fps",
+	corner(card, 8)
+	local cardBar = new("Frame", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.fromScale(0, 0.5),
+		Size = UDim2.fromOffset(3, 0),
+		Parent = card,
+	})
+	corner(cardBar, 2)
+	self:_bindAccent(function(c)
+		cardBar.BackgroundColor3 = c
+	end)
+
+	local avatar = new("ImageLabel", {
+		Name = "Avatar",
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 10, 0.5, 0),
+		Size = UDim2.fromOffset(32, 32),
+		BackgroundColor3 = THEME.Stroke,
+		BackgroundTransparency = 0,
+		Image = "",
+		Parent = card,
+	})
+	corner(avatar, 16) -- full circle
+	stroke(avatar, THEME.Stroke, 1)
+	local initial = new("TextLabel", {
+		Text = string.upper(string.sub(LocalPlayer.DisplayName, 1, 1)),
+		FontFace = FONT_BOLD,
+		TextSize = 15,
+		TextColor3 = THEME.TextDim,
+		Size = UDim2.fromScale(1, 1),
+		Parent = avatar,
+	})
+	task.spawn(function()
+		local ok, url = pcall(function()
+			return Players:GetUserThumbnailAsync(LocalPlayer.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100)
+		end)
+		if ok and url and avatar.Parent then
+			avatar.Image = url
+			initial.Visible = false
+		end
+	end)
+
+	local nameLabel = new("TextLabel", {
+		Text = LocalPlayer.DisplayName,
+		TextSize = 12,
+		TextColor3 = THEME.TextDim,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Position = UDim2.fromOffset(50, 8),
+		Size = UDim2.new(1, -56, 0, 16),
+		Parent = card,
+	})
+	local statsLabel = new("TextLabel", {
+		Text = "-- fps  ·  --ms",
 		TextSize = 11,
 		TextColor3 = THEME.SubText,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		Position = UDim2.fromOffset(14, 24),
-		Size = UDim2.new(1, -28, 0, 14),
-		Parent = footer,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Position = UDim2.fromOffset(50, 25),
+		Size = UDim2.new(1, -56, 0, 14),
+		Parent = card,
 	})
+	local cardBtn = new("TextButton", { Name = "SettingsButton", Size = UDim2.fromScale(1, 1), ZIndex = 5, Parent = card })
+	cardBtn.MouseEnter:Connect(function()
+		tween(card, INFO_FAST, { BackgroundTransparency = self:_settingsOpen() and 0.2 or 0.6 })
+	end)
+	cardBtn.MouseLeave:Connect(function()
+		tween(card, INFO_FAST, { BackgroundTransparency = self:_settingsOpen() and 0.35 or 1 })
+	end)
+	cardBtn.MouseButton1Click:Connect(function()
+		self:ToggleSettings()
+	end)
+	self._footer = { Card = card, Bar = cardBar, Name = nameLabel }
 
 	-- content
 	self.Content = new("Frame", {
@@ -649,7 +714,7 @@ function Library:_buildWindow()
 		acc += dt
 		frames += 1
 		if acc >= 0.5 then
-			fps.Text = string.format("%d fps", math.floor(frames / acc + 0.5))
+			statsLabel.Text = string.format("%d fps  ·  %dms", math.floor(frames / acc + 0.5), math.floor(self:_readPing() + 0.5))
 			acc, frames = 0, 0
 		end
 	end)
@@ -2346,6 +2411,8 @@ function Library:Tab(name, icon)
 		page.Visible = true
 		page.GroupTransparency = 0
 		tab:_setSelected(true, true)
+	elseif self.SettingsTab and self.CurrentTab == self.SettingsTab and not self._settingsPicked then
+		self:_selectInstant(tab)
 	end
 	return tab
 end
@@ -2361,6 +2428,74 @@ function Tab:_column()
 	self._i += 1
 	local idx = ((self._i - 1) % 2) + 1
 	return self._cols[idx], idx
+end
+
+-- is the (sidebar-less) Settings tab the one on screen?
+function Library:_settingsOpen()
+	return self.SettingsTab ~= nil and self.CurrentTab == self.SettingsTab
+end
+
+function Library:_syncFooter()
+	local f = self._footer
+	if not f then
+		return
+	end
+	local on = self:_settingsOpen()
+	tween(f.Bar, INFO_SMOOTH, { Size = UDim2.fromOffset(3, on and 22 or 0) })
+	tween(f.Name, INFO_SMOOTH, { TextColor3 = on and THEME.Text or THEME.TextDim })
+	tween(f.Card, INFO_SMOOTH, { BackgroundTransparency = on and 0.35 or 1 })
+end
+
+-- show a tab straight away, with no fade (used while the hub is still being set up)
+function Library:_selectInstant(tab)
+	local old = self.CurrentTab
+	if old == tab then
+		return
+	end
+	self.CurrentTab = tab
+	if old then
+		old:_setSelected(false, true)
+		old.Page.Visible = false
+		old.Page.GroupTransparency = 1
+	end
+	tab.Page.Visible = true
+	tab.Page.GroupTransparency = 0
+	tab.Page.Position = UDim2.new()
+	tab:_setSelected(true, true)
+	self:_syncFooter()
+end
+
+-- the bottom-left profile area: opens Settings, and goes back to the previous tab when clicked again
+function Library:ToggleSettings()
+	local s = self.SettingsTab
+	if not s then
+		return
+	end
+	if self.CurrentTab == s then
+		local back = self._lastTab
+		if back and back ~= s then
+			self:SelectTab(back)
+		end
+	else
+		self._lastTab = self.CurrentTab
+		self._settingsPicked = true
+		self:SelectTab(s)
+	end
+end
+
+-- round-trip ms. The stats item is the accurate source, but some contexts (Studio) refuse the read,
+-- so fall back to the player's own network ping (one way, in seconds)
+function Library:_readPing()
+	local ok, v = pcall(function()
+		return game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue()
+	end)
+	if ok and type(v) == "number" then
+		return v
+	end
+	local ok2, p = pcall(function()
+		return LocalPlayer:GetNetworkPing()
+	end)
+	return ok2 and type(p) == "number" and p * 2000 or 0
 end
 
 function Library:SelectTab(tab)
@@ -2383,6 +2518,7 @@ function Library:SelectTab(tab)
 	tab.Page.GroupTransparency = 1
 	tween(tab.Page, INFO_SMOOTH, { GroupTransparency = 0, Position = UDim2.new() })
 	tab:_setSelected(true)
+	self:_syncFooter()
 end
 
 -- modules ---------------------------------------------------------------------
@@ -3462,19 +3598,8 @@ function Library:_buildStats(island)
 	renderFps(60)
 	renderPing(0)
 
-	-- round-trip ms. The stats item is the accurate source, but some contexts (Studio) refuse the read,
-	-- so fall back to the player's own network ping (one way, in seconds)
 	local function readPing()
-		local ok, v = pcall(function()
-			return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
-		end)
-		if ok and type(v) == "number" then
-			return v
-		end
-		local ok2, p = pcall(function()
-			return LocalPlayer:GetNetworkPing()
-		end)
-		return ok2 and type(p) == "number" and p * 2000 or 0
+		return self:_readPing()
 	end
 
 	local acc, frames = 0, 0
@@ -3740,6 +3865,10 @@ end
 
 function Library:CreateSettingsTab()
 	local tab = self:Tab("Settings")
+	-- no sidebar entry in 2D / 3D: it opens from the profile area at the bottom left (Tabs mode still shows it as a panel)
+	tab.Button.Visible = false
+	self.SettingsTab = tab
+	self:_syncFooter()
 
 	local ui = tab:Section({ Name = "Interface", Description = "Display mode and behaviour", Open = true })
 	self._modeDropdown = ui:Dropdown({

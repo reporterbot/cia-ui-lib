@@ -2,7 +2,7 @@
 
 A dark, grey, Minecraft-client style UI library for Roblox, shipped as a **single LocalScript** (`main.lua`).
 
-**Build 8 · v1**
+**Build 9 · v1**
 
 - Three display modes you can switch between at any time: a **2D** window, a **3D** hub that floats in front of your character, and floating **Tabs** panels along the top of the screen
 - Modules with smooth expanding settings, toggles, sliders, dropdowns (single or multi-select), buttons, keybinds and labels
@@ -43,6 +43,10 @@ The arrow icon is `rbxassetid://134387593103194`; change it with `IslandIcon = "
 | `Tabs` | One floating panel per tab, packed from the top left to the top right. The row scales down when there are too many tabs for the screen. Each panel has a down arrow in its header: click it (or the header) and the panel's contents slide up and fade into the header; click again and it drops back down. |
 
 Switch with the **Mode** button beside the island (it cycles 2D → 3D → Tabs), the pill in the window's title bar, the Mode dropdown in Settings, or `UI:SetMode("3D")`.
+
+#### Profile area and Settings
+
+In 2D and 3D, the bottom-left corner of the window shows your round profile picture, your name, and your live **fps and ping**. Settings is not listed in the sidebar: **click the profile area to open it**, and click it again to return to the tab you were on. It lights up while Settings is open. In Tabs mode Settings is just another panel, as before.
 
 ## Usage
 
@@ -155,7 +159,8 @@ Roblox only allows certain contexts to parent into CoreGui (plugins and some ele
 | Call | Description |
 | --- | --- |
 | `UI:Tab(name, icon?)` | Adds a tab. `icon` is an optional image asset id. |
-| `UI:CreateSettingsTab()` | Adds the built-in Settings tab. |
+| `UI:CreateSettingsTab()` | Adds the built-in Settings tab (opened from the profile area in 2D / 3D, a panel in Tabs mode). |
+| `UI:ToggleSettings()` | Open Settings, or go back to the previous tab if it's already open (2D / 3D). |
 | `UI:Notify({ Title, Content, Type, Duration })` | `Type` is `Info` (default, uses the accent), `Success`, `Warning` or `Error`. Returns `{ Close = function }`. |
 | `UI:SetMode("2D" \| "3D" \| "Tabs")` | Switch display mode. |
 | `UI:SetVisible(bool)` / `UI:Toggle()` | Show or hide the hub. |
