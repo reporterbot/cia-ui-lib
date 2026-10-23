@@ -1,5 +1,5 @@
 --[[
-	CIALib v1  |  Build 12
+	CIALib v1  |  Build 13
 	Single-script build of the Minecraft-client style UI library.
 
 	Modes   : 2D (window), 3D (floating hub in front of your character), Tabs (floating panels along the top)
@@ -15,7 +15,7 @@
 		UI:Notify({ Title = "Hi", Content = "Hello", Type = "Success" })
 ]]
 
-local BUILD = 12
+local BUILD = 13
 local VERSION = "v1"
 
 -- only ever one hub per client (this script is re-cloned from StarterGui on respawn)
@@ -61,7 +61,7 @@ local TOP_SAFE = 60 -- keep the 2D window below the island row
 local ISLAND_ICON = "rbxassetid://134387593103194" -- arrow on the island's show / hide button
 local PANEL_ARROW = "rbxassetid://134161790366779" -- collapse arrow on each Tabs-mode panel
 local EFFECT_NAMES = { "Ripple", "1's and 0's", "Glass Crack" } -- Interactive Elements > Effect Animation
-local BACKGROUND_NAMES = { "Waves", "Stormy Night", "Cherry Blossom" } -- Custom Backgrounds > Background
+local BACKGROUND_NAMES = { "Waves", "Stormy Night", "Cherry Blossom", "Clouds", "Shapes" } -- Custom Backgrounds > Background
 local MODES = { ["2D"] = true, ["3D"] = true, Tabs = true }
 local MODE_ORDER = { "2D", "3D", "Tabs" }
 
@@ -1936,6 +1936,314 @@ BACKGROUNDS["Cherry Blossom"] = function(self, L)
 					else
 						lf.f.BackgroundTransparency = 0.05 + 0.95 * lf.fade
 					end
+				end
+			end
+		end,
+	}
+end
+
+-- blocky clouds in the theme colour that drift from the left to the right, in three layers (far ones are small, slow
+-- and faint, near ones big, quick and bright). Each cloud is a stack of square blocks, darker underneath; a cloud that
+-- leaves on the right comes back in from the left at a new height and speed.
+BACKGROUNDS["Clouds"] = function(self, L)
+	local rng = Random.new()
+	local back = L.Back
+	local scale = math.max(L.Scale(), 0.05)
+	local W0 = math.max(back.AbsoluteSize.X / scale, 215)
+	local H0 = back.AbsoluteSize.Y / scale
+	if H0 < 120 then
+		H0 = 160
+	end
+	local base = math.clamp(math.floor(H0 / 40), 5, 12) -- block size of the middle layer
+
+	local WHITE, BLACK = Color3.new(1, 1, 1), Color3.new(0, 0, 0)
+	local function palette(a)
+		return {
+			sky = BLACK:Lerp(a, 0.10),
+			top = a:Lerp(WHITE, 0.85),
+			body = a:Lerp(WHITE, 0.62),
+			under = a:Lerp(WHITE, 0.32),
+		}
+	end
+	local color = self.Accent
+	local pal = palette(color)
+
+	local sky = new("Frame", {
+		Name = "Sky",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = pal.sky,
+		BackgroundTransparency = 0.35,
+		ZIndex = 0,
+		Parent = back,
+	})
+	new("UIGradient", {
+		Rotation = 90,
+		Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 0.7) }),
+		Parent = sky,
+	})
+
+	local painted, clouds = {}, {}
+	local LAYERS = {
+		{ n = 4, k = 0.7, speed = { 8, 14 }, alpha = 0.78, z = 1 }, -- far
+		{ n = 4, k = 1.0, speed = { 16, 24 }, alpha = 0.66, z = 2 },
+		{ n = 3, k = 1.45, speed = { 28, 40 }, alpha = 0.52, z = 3 }, -- near
+	}
+	for _, ly in ipairs(LAYERS) do
+		local cell = math.max(math.floor(base * ly.k), 4)
+		for _ = 1, ly.n do
+			local group = new("Frame", {
+				BackgroundTransparency = 1,
+				Size = UDim2.fromOffset(0, 0),
+				ZIndex = ly.z,
+				Parent = back,
+			})
+			local cw = rng:NextInteger(6, 11) -- width in blocks
+			local rows = rng:NextInteger(3, 4)
+			for r = 0, rows - 1 do
+				-- each row up is a little narrower, with a random wobble, so the top is lumpy
+				local rw = math.max(cw - r * rng:NextInteger(1, 3), 2)
+				local off = math.max(math.floor((cw - rw) / 2) + rng:NextInteger(-1, 1), 0)
+				local kind = r == 0 and "under" or (r == rows - 1 and "top" or "body")
+				for c = 0, rw - 1 do
+					local f = new("Frame", {
+						AnchorPoint = Vector2.new(0, 1),
+						Position = UDim2.fromOffset((off + c) * cell, -r * cell),
+						Size = UDim2.fromOffset(cell, cell),
+						BackgroundColor3 = pal[kind],
+						BackgroundTransparency = ly.alpha,
+						ZIndex = ly.z,
+						Parent = group,
+					})
+					table.insert(painted, { f, kind })
+				end
+			end
+			table.insert(clouds, {
+				group = group,
+				width = cw * cell,
+				x = rng:NextNumber(-cw * cell, W0),
+				y = rng:NextNumber(0.15, 0.7) * H0,
+				speed = rng:NextNumber(ly.speed[1], ly.speed[2]),
+				layer = ly,
+			})
+		end
+	end
+
+	return {
+		Height = H0,
+		Step = function(dt, _, w, h)
+			if color ~= self.Accent then -- the theme colour changed
+				color = self.Accent
+				pal = palette(color)
+				sky.BackgroundColor3 = pal.sky
+				for _, p in ipairs(painted) do
+					p[1].BackgroundColor3 = pal[p[2]]
+				end
+			end
+			for _, c in ipairs(clouds) do
+				c.x += c.speed * dt
+				if c.x > w + 8 then -- gone off the right: come back in from the left
+					c.x = -c.width - rng:NextNumber(0, 80)
+					c.y = rng:NextNumber(0.15, 0.7) * h
+					c.speed = rng:NextNumber(c.layer.speed[1], c.layer.speed[2])
+				end
+				c.group.Position = UDim2.fromOffset(c.x, c.y)
+			end
+		end,
+	}
+end
+
+-- circles, squares and triangles of random sizes, drawn entirely from 1s and 0s and packed to fill the whole tab. They
+-- bob up and down, and their digits keep re-rolling like data. Each shape is two monospace text labels: a dim fill and a
+-- brighter outline, so the shape reads clearly even when they are packed tightly together.
+BACKGROUNDS["Shapes"] = function(self, L)
+	local rng = Random.new()
+	local back = L.Back
+	local scale = math.max(L.Scale(), 0.05)
+	local W0 = math.max(back.AbsoluteSize.X / scale, 215)
+	local H0Raw = back.AbsoluteSize.Y / scale
+	local H0 = H0Raw < 120 and 160 or H0Raw
+	local MONO = Font.fromEnum(Enum.Font.Code)
+	local LINE = 0.62 -- tighter line spacing makes the character cells closer to square
+	local WHITE = Color3.new(1, 1, 1)
+	local color = self.Accent
+	local function tint(a)
+		return a:Lerp(WHITE, 0.35)
+	end
+
+	-- measure one character cell at size 10 so the shapes can be laid out in real pixels
+	local probe = new("TextLabel", {
+		Text = "0\n0",
+		FontFace = MONO,
+		TextSize = 10,
+		LineHeight = LINE,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Size = UDim2.fromOffset(100, 100),
+		Parent = back,
+	})
+	local cw0, lh0 = probe.TextBounds.X, probe.TextBounds.Y / 2
+	probe:Destroy()
+	if cw0 < 1 or lh0 < 1 then
+		cw0, lh0 = 6, 7.5
+	end
+
+	-- pack circles into the layer (bucketed so the overlap test stays cheap): big ones first, then smaller and smaller
+	-- ones in the gaps, then a final sweep that drops the smallest size into every hole that is left
+	local GAP = 5
+	local Rmax = math.clamp(math.min(W0, H0) * 0.16, 20, 52)
+	local Rmin = 9
+	local BUCKET = 64
+	local placed, buckets = {}, {}
+	local function bucketKey(ix, iy)
+		return ix * 4096 + iy
+	end
+	local function fits(cx, cy, r)
+		if cx - r < 1 or cx + r > W0 - 1 or cy - r < 1 or cy + r > H0 - 1 then
+			return false
+		end
+		local ix, iy = math.floor(cx / BUCKET), math.floor(cy / BUCKET)
+		for dx = -2, 2 do
+			for dy = -2, 2 do
+				local b = buckets[bucketKey(ix + dx, iy + dy)]
+				if b then
+					for _, p in ipairs(b) do
+						local ex, ey = p.cx - cx, p.cy - cy
+						local m = p.r + r + GAP
+						if ex * ex + ey * ey < m * m then
+							return false
+						end
+					end
+				end
+			end
+		end
+		return true
+	end
+	local function place(cx, cy, r)
+		local p = { cx = cx, cy = cy, r = r }
+		local k = bucketKey(math.floor(cx / BUCKET), math.floor(cy / BUCKET))
+		buckets[k] = buckets[k] or {}
+		table.insert(buckets[k], p)
+		table.insert(placed, p)
+	end
+	local R = Rmax
+	while R >= Rmin + 1 and #placed < 260 do
+		for _ = 1, 140 do
+			local r = R - rng:NextNumber(0, 3)
+			local cx = rng:NextNumber(r, math.max(W0 - r, r + 1))
+			local cy = rng:NextNumber(r, math.max(H0 - r, r + 1))
+			if fits(cx, cy, r) then
+				place(cx, cy, r)
+			end
+		end
+		R -= 2
+	end
+	for gy = Rmin, H0 - Rmin, 5 do -- sweep: fill what is left
+		for gx = Rmin, W0 - Rmin, 5 do
+			if #placed < 260 and fits(gx, gy, Rmin) then
+				place(gx, gy, Rmin)
+			end
+		end
+	end
+
+	local KINDS = { "circle", "square", "triangle" }
+	local function inside(kind, u, v) -- u, v in 0..1 across the shape's box
+		if kind == "circle" then
+			local dx, dy = u - 0.5, v - 0.5
+			return dx * dx + dy * dy <= 0.25
+		elseif kind == "square" then
+			return true
+		end
+		return math.abs(u - 0.5) <= v / 2 -- triangle, point up
+	end
+	local function compose(s, edgeOnly)
+		local lines = table.create(s.rows)
+		for j = 1, s.rows do
+			local chars = table.create(s.cols)
+			for i = 1, s.cols do
+				local on = s.mask[j][i] and (not edgeOnly or s.edge[j][i])
+				chars[i] = on and (rng:NextInteger(0, 1) == 1 and "1" or "0") or " "
+			end
+			lines[j] = table.concat(chars)
+		end
+		return table.concat(lines, "\n")
+	end
+
+	local shapes = {}
+	for i, p in ipairs(placed) do
+		local kind = i <= 3 and KINDS[i] or KINDS[rng:NextInteger(1, 3)] -- all three kinds always appear
+		local size = math.clamp(math.floor(p.r / 3.6), 7, 12)
+		local cw, lh = cw0 * size / 10, lh0 * size / 10
+		local cols = math.max(math.floor(2 * p.r / cw), 3)
+		local rows = math.max(math.floor(2 * p.r / lh), 3)
+		local s = { cols = cols, rows = rows, mask = {}, edge = {} }
+		for j = 1, rows do
+			s.mask[j] = {}
+			for k = 1, cols do
+				s.mask[j][k] = inside(kind, (k - 0.5) / cols, (j - 0.5) / rows)
+			end
+		end
+		for j = 1, rows do -- an outline cell is a filled cell with an empty (or missing) neighbour
+			s.edge[j] = {}
+			for k = 1, cols do
+				local function filled(a, b)
+					return s.mask[a] and s.mask[a][b] or false
+				end
+				s.edge[j][k] = s.mask[j][k]
+					and not (filled(j - 1, k) and filled(j + 1, k) and filled(j, k - 1) and filled(j, k + 1))
+			end
+		end
+		s.x, s.y = p.cx - cols * cw / 2, p.cy - rows * lh / 2
+		s.amp, s.speed, s.phase = rng:NextNumber(4, 9), rng:NextNumber(0.6, 1.6), rng:NextNumber(0, math.pi * 2)
+		s.timer = rng:NextNumber(0.2, 2.4)
+
+		s.group = new("Frame", {
+			BackgroundTransparency = 1,
+			Size = UDim2.fromOffset(cols * cw + 4, rows * lh + 4),
+			Position = UDim2.fromOffset(s.x, s.y),
+			Parent = back,
+		})
+		local function textLabel(edgeOnly, transparency, z)
+			return new("TextLabel", {
+				Text = compose(s, edgeOnly),
+				FontFace = MONO,
+				TextSize = size,
+				LineHeight = LINE,
+				TextColor3 = tint(color),
+				TextTransparency = transparency,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextYAlignment = Enum.TextYAlignment.Top,
+				Size = UDim2.fromScale(1, 1),
+				ZIndex = z,
+				Parent = s.group,
+			})
+		end
+		s.fill = textLabel(false, rng:NextNumber(0.62, 0.78), 1)
+		s.outline = textLabel(true, rng:NextNumber(0.1, 0.3), 2)
+		shapes[i] = s
+	end
+
+	return {
+		Height = H0Raw,
+		Step = function(dt, now)
+			if color ~= self.Accent then -- the theme colour changed
+				color = self.Accent
+				local c = tint(color)
+				for _, s in ipairs(shapes) do
+					s.fill.TextColor3 = c
+					s.outline.TextColor3 = c
+				end
+			end
+			for _, s in ipairs(shapes) do
+				-- a slow float up and down with a little sway
+				s.group.Position = UDim2.fromOffset(
+					s.x + math.cos(now * s.speed * 0.7 + s.phase) * 2.5,
+					s.y + math.sin(now * s.speed + s.phase) * s.amp
+				)
+				s.timer -= dt
+				if s.timer <= 0 then -- re-roll the digits now and then, a few shapes at a time
+					s.timer = rng:NextNumber(0.9, 2.4)
+					s.fill.Text = compose(s, false)
+					s.outline.Text = compose(s, true)
 				end
 			end
 		end,
