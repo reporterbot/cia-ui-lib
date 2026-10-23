@@ -2,7 +2,7 @@
 
 A dark, grey, Minecraft-client style UI library for Roblox, shipped as a **single LocalScript** (`main.lua`).
 
-**Build 11 · v1**
+**Build 12 · v1**
 
 - Three display modes you can switch between at any time: a **2D** window, a **3D** hub that floats in front of your character, and floating **Tabs** panels along the top of the screen
 - Modules with smooth expanding settings, toggles, sliders, dropdowns (single or multi-select), **colour pickers** (single colour or two-colour gradient, as an inline circle or a bar that opens it), buttons, keybinds and labels
@@ -131,6 +131,7 @@ Effects are drawn on a clipped layer covering just that tab's content area (the 
 | --- | --- | --- |
 | `Mode` | `"Normal"` (default), `"Gradient"` | `Normal` picks one colour. `Gradient` picks two (a **Start** and an **End** button choose which one the circle edits) and the bar previews the gradient. |
 | `Style` | `"Normal"` (default), `"Bar"` | `Normal` shows the circle picker directly. `Bar` shows just a bar (a swatch, or the gradient) and clicking it drops the circle picker open. |
+| `Switchable` | `true`, `false` (default) | Adds a **Normal / Gradient** switch at the top of the picker so the user can swap between a single colour and a gradient themselves. Swapping runs the callback with the new values. |
 
 ```lua
 local color = Mod:ColorPicker({
@@ -150,7 +151,15 @@ local fade = Mod:ColorPicker({
 frame.UIGradient.Color = fade:GetSequence()   -- ready-made ColorSequence
 ```
 
-The callback runs continuously while you drag. The control has `:Get()` (a colour, or the start and end colours in Gradient mode), `:Set(color)`, `:SetGradient(start, end)`, `:GetSequence()`, `:SetMode("Gradient")`, `:SetStyle("Bar")` and, for the Bar style, `:Open(true)`.
+The callback runs continuously while you drag. The control has `:Get()` (a colour, or the start and end colours in Gradient mode), `:Set(color)`, `:SetGradient(start, end)`, `:GetSequence()`, `:SetMode("Gradient")` (pass `true` as the second argument to also run the callback), `:SetStyle("Bar")` and, for the Bar style, `:Open(true)`.
+
+#### Custom theme colour
+
+**Settings → Theme** has a **Custom Color** picker (a bar that opens the circle picker, with the Normal / Gradient switch) and an **Enable Custom Color** switch under it.
+
+- **Switch on:** the theme follows the picker, live as you drag. In **Normal** mode it is one colour. In **Gradient** mode the theme is a two-colour gradient: the accent line, the title, the Tabs-mode panel lines and the slider fills show the gradient, and everything else uses the start colour.
+- **Switch off:** the theme returns to the last preset chosen in the **Accent** dropdown. Moving the picker while it's off changes nothing.
+- Picking a preset from the **Accent** dropdown, or turning on **Rainbow**, ends Custom Color. Turning Rainbow off brings back the custom colour or gradient exactly.
 
 #### Custom Backgrounds
 
@@ -197,7 +206,7 @@ Roblox only allows certain contexts to parent into CoreGui (plugins and some ele
 | `UI:SetElementTransparencyOverride(bool)` / `UI:SetElementTransparency(n)` | Use your own element transparency (0 to 0.9) instead of the automatic 0.5 over a background. |
 | `UI:PlayEffect(origin, tab)` | Play the current Interactive Elements effect from a GuiObject or a screen position inside `tab`'s space. |
 | `UI:SetPanelOpen(tab, bool)` | Collapse or open a tab's panel in Tabs mode (`tab` is the Tab object or its name). The state is remembered when you switch modes. |
-| `UI:SetAccent(Color3)` | Change the accent colour. Presets are in `Library.ACCENTS`. While Rainbow is running, the colour you pass is remembered instead and is what the theme returns to when Rainbow stops. |
+| `UI:SetAccent(Color3, Color3?)` | Change the accent colour, or pass a second colour for a gradient theme. Presets are in `Library.ACCENTS`. While Rainbow is running, what you pass is remembered instead and is what the theme returns to when Rainbow stops. |
 | `UI:SetRainbow(bool)` | Turn the Rainbow theme on or off (the Rainbow switch in Settings → Theme). Turning it **off** fades smoothly back to the colour the theme had before Rainbow started. Picking an accent from the dropdown while it runs ends Rainbow and keeps your pick. |
 | `UI:SetScale(n)` | Extra 2D scale on top of the automatic fit (0.5 – 1.5). |
 | `UI:SetOffset3D(side, up, forward)` / `UI:SetScale3D(n)` | 3D hub placement relative to your character. |

@@ -1,5 +1,5 @@
 --[[
-	CIALib v1  |  Build 11
+	CIALib v1  |  Build 12
 	Single-script build of the Minecraft-client style UI library.
 
 	Modes   : 2D (window), 3D (floating hub in front of your character), Tabs (floating panels along the top)
@@ -15,7 +15,7 @@
 		UI:Notify({ Title = "Hi", Content = "Hello", Type = "Success" })
 ]]
 
-local BUILD = 11
+local BUILD = 12
 local VERSION = "v1"
 
 -- only ever one hub per client (this script is re-cloned from StarterGui on respawn)
@@ -262,6 +262,9 @@ function Library.new(config)
 	self.Version = config.Version or "v1.0"
 	self.MenuKey = config.Keybind or Enum.KeyCode.RightShift
 	self.Accent = config.Accent or ACCENTS.Silver
+	self.AccentB = nil -- second colour when the theme is a gradient
+	self._presetAccent = self.Accent -- what Custom Color falls back to when it is switched off
+	self.CustomColorEnabled = false
 	self.Mode = "2D"
 	self.Visible = false
 	self.UserScale = 1
@@ -321,30 +324,33 @@ end
 
 function Library:_bindAccent(fn)
 	table.insert(self._accentFns, fn)
-	fn(self.Accent)
+	fn(self.Accent, self.AccentB)
 end
 
--- changes the colour everywhere, with no bookkeeping (Rainbow uses this every frame)
-function Library:_applyAccent(color)
+-- changes the colour everywhere, with no bookkeeping (Rainbow uses this every frame). colorB is the optional second
+-- colour of a gradient theme: the accent line, title, Tabs-mode panel lines and slider fills show the gradient, and
+-- everything else uses `color`.
+function Library:_applyAccent(color, colorB)
 	self.Accent = color
+	self.AccentB = colorB
 	for _, fn in ipairs(self._accentFns) do
-		fn(color)
+		fn(color, colorB)
 	end
 end
 
--- the theme colour. While Rainbow is running the new colour is remembered instead: it is what the theme returns to
--- when Rainbow is switched off.
-function Library:SetAccent(color)
+-- the theme colour (and optionally a second colour for a gradient). While Rainbow is running the new colour is
+-- remembered instead: it is what the theme returns to when Rainbow is switched off.
+function Library:SetAccent(color, colorB)
 	self._accentToken = (self._accentToken or 0) + 1 -- cancels a fade back that is still in progress
-	self._fadeTarget = nil
+	self._fadeTarget, self._fadeTargetB = nil, nil
 	if self.Rainbow then
-		self._preRainbow = color
+		self._preRainbow, self._preRainbowB = color, colorB
 		return
 	end
-	self:_applyAccent(color)
+	self:_applyAccent(color, colorB)
 end
 
--- Rainbow on remembers the current colour; Rainbow off fades back to it. keepColor skips the fade back
+-- Rainbow on remembers the current colour (or gradient); Rainbow off fades back to it. keepColor skips the fade back
 -- (used when a new accent has just been picked).
 function Library:SetRainbow(on, keepColor)
 	on = on and true or false
@@ -356,32 +362,49 @@ function Library:SetRainbow(on, keepColor)
 	if on then
 		-- if it is switched back on while still fading to the original colour, the original is what to remember
 		self._preRainbow = self._fadeTarget or self.Accent
-		self._fadeTarget = nil
+		self._preRainbowB = self._fadeTarget and self._fadeTargetB or self.AccentB
+		self._fadeTarget, self._fadeTargetB = nil, nil
 		self.Rainbow = true
 		return
 	end
 	self.Rainbow = false
-	local back = self._preRainbow
-	self._preRainbow = nil
-	self._fadeTarget = nil
+	local back, backB = self._preRainbow, self._preRainbowB
+	self._preRainbow, self._preRainbowB = nil, nil
+	self._fadeTarget, self._fadeTargetB = nil, nil
 	if keepColor or not back then
 		return
 	end
-	self._fadeTarget = back
+	self._fadeTarget, self._fadeTargetB = back, backB
 	local from = self.Accent
 	task.spawn(function()
 		local t0 = os.clock()
 		while self._accentToken == token and not self.Rainbow do
 			local a = math.clamp((os.clock() - t0) / 0.4, 0, 1)
 			if a >= 1 then
-				self._fadeTarget = nil
-				self:_applyAccent(back) -- land on the exact original colour
+				self._fadeTarget, self._fadeTargetB = nil, nil
+				self:_applyAccent(back, backB) -- land on the exact original colour (or gradient)
 				return
 			end
 			self:_applyAccent(from:Lerp(back, 1 - (1 - a) ^ 3))
 			task.wait()
 		end
 	end)
+end
+
+-- Custom Color: when it is enabled the theme follows the colour picker in Settings -> Theme (one colour, or a
+-- gradient when the picker is switched to Gradient)
+function Library:_applyCustomColor()
+	if not self.CustomColorEnabled or not self._customPicker then
+		return
+	end
+	if self.Rainbow then -- choosing a custom colour ends Rainbow
+		self:SetRainbow(false, true)
+		if self._rainbowToggle then
+			self._rainbowToggle:Set(false, true)
+		end
+	end
+	local first, second = self._customPicker:Get()
+	self:SetAccent(first, second)
 end
 
 function Library:_buildGui()
@@ -480,8 +503,11 @@ function Library:_buildWindow()
 		LayoutOrder = 2,
 		Parent = brand,
 	})
-	self:_bindAccent(function(c)
-		title.TextColor3 = c
+	local titleGradient = new("UIGradient", { Parent = title })
+	self:_bindAccent(function(c, c2)
+		-- the gradient multiplies the text colour, so the text is white and the gradient carries the colour(s)
+		title.TextColor3 = Color3.new(1, 1, 1)
+		titleGradient.Color = ColorSequence.new(c, c2 or c)
 	end)
 
 	local closeBtn = new("TextButton", {
@@ -537,7 +563,11 @@ function Library:_buildWindow()
 	})
 	local lineGradient = new("UIGradient", { Parent = line })
 	self._lineGradient = lineGradient
-	self:_bindAccent(function(c)
+	self:_bindAccent(function(c, c2)
+		if c2 then
+			lineGradient.Color = ColorSequence.new(c, c2)
+			return
+		end
 		local h, s, v = c:ToHSV()
 		local shifted = Color3.fromHSV((h + 0.08) % 1, s, v)
 		lineGradient.Color = ColorSequence.new({
@@ -2098,8 +2128,10 @@ function Library:_makePanel(tab)
 		ZIndex = 7,
 		Parent = header,
 	})
-	self:_bindAccent(function(c)
-		line.BackgroundColor3 = c
+	local lineGrad = new("UIGradient", { Parent = line })
+	self:_bindAccent(function(c, c2)
+		line.BackgroundColor3 = Color3.new(1, 1, 1)
+		lineGrad.Color = ColorSequence.new(c, c2 or c)
 	end)
 	local arrow = new("ImageButton", {
 		Name = "Arrow",
@@ -2932,8 +2964,10 @@ function Module:Slider(o)
 		Parent = track,
 	})
 	corner(knob, 7)
-	lib:_bindAccent(function(c)
-		fill.BackgroundColor3 = c
+	local fillGradient = new("UIGradient", { Parent = fill })
+	lib:_bindAccent(function(c, c2)
+		fill.BackgroundColor3 = Color3.new(1, 1, 1)
+		fillGradient.Color = ColorSequence.new(c, c2 or c)
 	end)
 	local hit = new("TextButton", { Size = UDim2.fromScale(1, 1), Parent = root })
 
@@ -3280,6 +3314,37 @@ function Module:ColorPicker(o)
 	chevron.Rotation = open and 90 or 0
 
 	local refresh -- defined below; the Start / End buttons call it
+	local ctrl = {}
+
+	-- Switchable: the user can swap between a single colour and a two-colour gradient
+	local modeRow = new("Frame", {
+		Name = "Modes",
+		Size = UDim2.new(1, 0, 0, 24),
+		BackgroundTransparency = 1,
+		LayoutOrder = 0,
+		Visible = o.Switchable == true,
+		Parent = body,
+	})
+	local modeBtns = {}
+	for i, name in ipairs({ "Normal", "Gradient" }) do
+		local mb = new("TextButton", {
+			Name = name,
+			Text = name,
+			FontFace = FONT_BOLD,
+			TextSize = 12,
+			TextColor3 = THEME.SubText,
+			Position = UDim2.new(i == 1 and 0 or 0.5, i == 1 and 0 or 3, 0, 0),
+			Size = UDim2.new(0.5, -3, 1, 0),
+			BackgroundTransparency = 0,
+			BackgroundColor3 = THEME.Background,
+			Parent = modeRow,
+		})
+		corner(mb, 6)
+		modeBtns[name] = { btn = mb, outline = stroke(mb, THEME.Stroke, 1) }
+		mb.MouseButton1Click:Connect(function()
+			ctrl:SetMode(name, true)
+		end)
+	end
 
 	-- Gradient mode: choose which of the two colours the wheel edits
 	local stopRow = new("Frame", {
@@ -3418,8 +3483,6 @@ function Module:ColorPicker(o)
 		Parent = body,
 	})
 
-	local ctrl = {}
-
 	refresh = function()
 		local s = stops[active]
 		local c = color(active)
@@ -3435,22 +3498,33 @@ function Module:ColorPicker(o)
 			stopBtns[i].dot.BackgroundColor3 = color(i)
 			stopBtns[i].outline.Color = (mode == "Gradient" and i == active) and lib.Accent or THEME.Stroke
 		end
+		for name, mb in pairs(modeBtns) do
+			local on = name == mode
+			mb.outline.Color = on and lib.Accent or THEME.Stroke
+			mb.btn.TextColor3 = on and THEME.Text or THEME.SubText
+		end
 	end
 	lib:_bindAccent(function(c)
 		for i = 1, 2 do
 			stopBtns[i].outline.Color = (mode == "Gradient" and i == active) and c or THEME.Stroke
 		end
+		for name, mb in pairs(modeBtns) do
+			mb.outline.Color = name == mode and c or THEME.Stroke
+		end
 	end)
 
-	local function commit(silent)
-		refresh()
-		if silent then
-			return
-		end
+	local function fire()
 		if mode == "Gradient" then
 			safe(o.Callback, color(1), color(2))
 		else
 			safe(o.Callback, color(1))
+		end
+	end
+
+	local function commit(silent)
+		refresh()
+		if not silent then
+			fire()
 		end
 	end
 
@@ -3545,11 +3619,14 @@ function Module:ColorPicker(o)
 		stops[1], stops[2] = toHSV(a), toHSV(b)
 		commit(silent)
 	end
-	function ctrl:SetMode(m)
+	function ctrl:SetMode(m, notify) -- notify = true runs the callback (the Normal / Gradient buttons do)
 		mode = m == "Gradient" and "Gradient" or "Normal"
 		active = 1
 		applyLayout()
 		refresh()
+		if notify then
+			fire()
+		end
 	end
 	function ctrl:SetStyle(s)
 		style = s == "Bar" and "Bar" or "Normal"
@@ -4384,6 +4461,12 @@ function Library:CreateSettingsTab()
 			if self._rainbowToggle then
 				self._rainbowToggle:Set(false, true)
 			end
+			-- ...and picking a preset ends Custom Color too
+			self.CustomColorEnabled = false
+			if self._customToggle then
+				self._customToggle:Set(false, true)
+			end
+			self._presetAccent = ACCENTS[v]
 			self:SetAccent(ACCENTS[v])
 		end,
 	})
@@ -4392,6 +4475,28 @@ function Library:CreateSettingsTab()
 		Default = false,
 		Callback = function(v)
 			self:SetRainbow(v)
+		end,
+	})
+	self._customPicker = theme:ColorPicker({
+		Name = "Custom Color",
+		Mode = "Normal",
+		Style = "Bar",
+		Switchable = true, -- swap between a single colour and a two-colour gradient
+		Default = { Color3.fromRGB(64, 160, 255), Color3.fromRGB(156, 108, 255) },
+		Callback = function()
+			self:_applyCustomColor()
+		end,
+	})
+	self._customToggle = theme:Toggle({
+		Name = "Enable Custom Color",
+		Default = false,
+		Callback = function(on)
+			self.CustomColorEnabled = on
+			if on then
+				self:_applyCustomColor()
+			else
+				self:SetAccent(self._presetAccent)
+			end
 		end,
 	})
 
